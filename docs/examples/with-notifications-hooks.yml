@@ -1,0 +1,49 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/nicolaeser/dockpaum/main/dockpaum.schema.json
+
+schedule:
+  interval: 10m
+
+update:
+  policies:
+    - id: default
+      mode: tag-follow
+      min_image_age: 1h
+    - id: database
+      mode: minor
+      health_timeout: 5m
+      timezone: Europe/Berlin
+      schedule: "0 3 * * SUN"
+      hooks:
+        pre_update:
+          - "host: /scripts/pg-backup.sh"
+          - "exec:@self:pg_dumpall -U postgres > /backup/pre-update.sql"
+
+notify:
+  - type: slack
+    name: team
+    url: ${SLACK_WEBHOOK}
+    events: [update.success, update.failure, run.completed]
+  - type: discord
+    name: alerts
+    url: ${DISCORD_WEBHOOK}
+    events: [update.failure]
+
+hooks:
+  timeout: 30s
+  pre_run:
+    - "host: logger -t dockpaum run starting $DOCKPAUM_RUN_ID"
+  post_run:
+    - "host: logger -t dockpaum run done: updated=$DOCKPAUM_UPDATED failed=$DOCKPAUM_FAILED"
+  pre_update:
+    - "host: logger -t dockpaum pre-update $DOCKPAUM_TARGET"
+  post_update:
+    - "host: logger -t dockpaum post-update $DOCKPAUM_TARGET"
+  on_failure:
+    - "host: logger -t dockpaum -p user.err failed $DOCKPAUM_TARGET"
+
+jobs:
+  - name: nightly-prune
+    cron: "30 4 * * *"
+    timeout: 10m
+    commands:
+      - "host: sh /scripts/cleanup.sh"

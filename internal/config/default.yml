@@ -1,0 +1,11 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/nicolaeser/dockpaum/main/dockpaum.schema.json
+dry_run: false
+
+schedule:
+  interval: 5m
+
+update:
+  policies:
+    - id: default
+      mode: tag-follow
+      min_image_age: 0s

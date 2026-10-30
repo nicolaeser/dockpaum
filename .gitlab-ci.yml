@@ -1,0 +1,126 @@
+workflow:
+  rules:
+    - if: $CI_COMMIT_BRANCH
+
+stages:
+  - quality
+  - build
+
+default:
+  tags:
+    - docker
+
+variables:
+  PLATFORMS: linux/amd64,linux/arm64,linux/arm/v7,linux/arm/v6
+
+.go:
+  stage: quality
+  interruptible: true
+  image: golang:1.27
+  variables:
+    GOPATH: $CI_PROJECT_DIR/.go
+    GOCACHE: $CI_PROJECT_DIR/.go/cache
+    GOFLAGS: -modcacherw
+  cache:
+    key:
+      files:
+        - go.sum
+    paths:
+      - .go/
+
+go:
+  extends: .go
+  timeout: 20m
+  script:
+    - want=$(sed -n 's/^toolchain go\([0-9]*\.[0-9]*\).*/\1/p' go.mod)
+    - grep -q "golang:$want-alpine" Dockerfile
+    - grep -q "image: golang:$want$" .gitlab-ci.yml
+    - go mod tidy -diff
+    - go mod download
+    - go mod verify
+    - make fmt-check vet test
+
+lint:
+  extends: .go
+  timeout: 20m
+  script:
+    - make lint
+
+govulncheck:
+  extends: .go
+  timeout: 15m
+  script:
+    - make vuln
+
+hadolint:
+  stage: quality
+  interruptible: true
+  image: hadolint/hadolint:v2.15.1-debian
+  script:
+    - hadolint Dockerfile
+
+compose:
+  stage: quality
+  interruptible: true
+  image:
+    name: docker:29.8.1
+    entrypoint: [""]
+  script:
+    - docker compose -f docker-compose.yml config >/dev/null
+
+build:
+  stage: build
+  timeout: 45m
+  image: docker:29.8.1
+  interruptible: false
+  resource_group: dockpaum-image
+  rules:
+    - if: $CI_PIPELINE_SOURCE != "schedule" && ($CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "development")
+  needs: [go, lint, govulncheck, hadolint, compose]
+  before_script:
+    - printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+    - docker buildx create --name "dockpaum-$CI_JOB_ID" --driver docker-container --use
+  script:
+    - |
+      set -eu
+      SHA=$(printf '%.7s' "$CI_COMMIT_SHA")
+      DAY=$(printf '%s' "$CI_COMMIT_TIMESTAMP" | cut -c1-10 | tr - .)
+      if [ "$CI_COMMIT_BRANCH" = main ]; then
+        VERSION="v$DAY.$SHA"
+        set -- latest "$VERSION" "$SHA"
+      else
+        VERSION="vdev$DAY.$SHA"
+        set -- dev "$VERSION" "dev-$SHA"
+      fi
+      BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+      TAGS=""
+      for t in "$@"; do TAGS="$TAGS --tag ghcr.io/nicolaeser/dockpaum:$t"; done
+      set -- --build-arg VERSION="$VERSION" --build-arg COMMIT="$CI_COMMIT_SHA" --build-arg BUILD_DATE="$BUILD_DATE" \
+        --pull --cache-from type=registry,ref=ghcr.io/nicolaeser/dockpaum:buildcache
+      docker buildx build "$@" --platform linux/amd64 --load --tag ghcr.io/nicolaeser/dockpaum:latest .
+      docker run --rm ghcr.io/nicolaeser/dockpaum:latest version --json | grep -F "\"version\": \"$VERSION\""
+      docker run --rm ghcr.io/nicolaeser/dockpaum:latest version --json | grep -F "\"commit\": \"$CI_COMMIT_SHA\""
+      docker run --rm ghcr.io/nicolaeser/dockpaum:latest --validate
+      for f in docs/examples/*.yml; do
+        echo "$f"
+        cid=$(docker create \
+          -e APPROVAL_TOKEN=smoke -e REG_USER=smoke -e REG_PASS=smoke -e UPDATE_API_TOKEN=smoke -e NTFY_TOPIC=smoke \
+          -e SLACK_WEBHOOK=https://hooks.slack.com/services/T000/B000/SMOKE \
+          -e SLACK_WEBHOOK_URL=https://hooks.slack.com/services/T000/B000/SMOKE \
+          -e DISCORD_WEBHOOK=https://discord.com/api/webhooks/000/smoke \
+          ghcr.io/nicolaeser/dockpaum:latest --validate)
+        docker cp "$f" "$cid:/etc/dockpaum/dockpaum.yml"
+        docker start -a "$cid"
+        docker rm "$cid" >/dev/null
+      done
+      docker buildx build "$@" --platform "$PLATFORMS" --push --provenance=mode=max --sbom=true $TAGS \
+        --cache-to type=registry,ref=ghcr.io/nicolaeser/dockpaum:buildcache,mode=max \
+        --label org.opencontainers.image.title=dockpaum \
+        --label org.opencontainers.image.version="$VERSION" \
+        --label org.opencontainers.image.revision="$CI_COMMIT_SHA" \
+        --label org.opencontainers.image.created="$BUILD_DATE" \
+        --label org.opencontainers.image.source=https://github.com/nicolaeser/dockpaum \
+        .
+  after_script:
+    - docker buildx rm "dockpaum-$CI_JOB_ID" || true
+    - docker image rm ghcr.io/nicolaeser/dockpaum:latest || true

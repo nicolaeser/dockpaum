@@ -1,0 +1,160 @@
+name: ci
+
+on:
+  push:
+    branches: [main, development]
+  pull_request:
+    branches: [main, development]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  PLATFORMS: linux/amd64,linux/arm64,linux/arm/v7,linux/arm/v6
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Go version matches go.mod
+        run: |
+          want=$(sed -n 's/^toolchain go\([0-9]*\.[0-9]*\).*/\1/p' go.mod)
+          grep -q "golang:$want-alpine" Dockerfile
+          grep -q "image: golang:$want$" .gitlab-ci.yml
+      - run: go mod tidy -diff
+      - run: make fmt-check vet test
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: make lint
+
+  govulncheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: make vuln
+
+  docker-lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: hadolint/hadolint-action@v3.5.0
+      - run: docker compose -f docker-compose.yml config > /dev/null
+
+  image:
+    needs: [go, lint, govulncheck, docker-lint]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - id: version
+        run: |
+          day=$(TZ=UTC git log -1 --date=format-local:%Y.%m.%d --format=%cd)
+          if [ "$GITHUB_REF" = refs/heads/main ]; then prefix=v; else prefix=vdev; fi
+          echo "version=$prefix$day.${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF" = refs/heads/main ]; then image_tag=latest; else image_tag=dev; fi
+          echo "image_tag=$image_tag" >> "$GITHUB_OUTPUT"
+      - id: meta
+        uses: docker/metadata-action@v6.2.0
+        with:
+          images: ghcr.io/nicolaeser/dockpaum
+          flavor: latest=false
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/development' }}
+            type=raw,value=${{ steps.version.outputs.version }}
+            type=sha,prefix=,format=short,enable=${{ github.ref == 'refs/heads/main' }}
+            type=sha,prefix=dev-,format=short,enable=${{ github.ref == 'refs/heads/development' }}
+          labels: |
+            org.opencontainers.image.title=dockpaum
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+      - uses: docker/setup-buildx-action@v4.1.0
+      - uses: docker/build-push-action@v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          pull: true
+          load: true
+          tags: ghcr.io/nicolaeser/dockpaum:${{ steps.version.outputs.image_tag }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke test
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          IMAGE_TAG="ghcr.io/nicolaeser/dockpaum:${{ steps.version.outputs.image_tag }}"
+          docker run --rm "$IMAGE_TAG" version --json | grep -F "\"version\": \"$VERSION\""
+          docker run --rm "$IMAGE_TAG" version --json | grep -F "\"commit\": \"$GITHUB_SHA\""
+          docker run --rm "$IMAGE_TAG" --validate
+          for f in docs/examples/*.yml; do
+            echo "$f"
+            docker run --rm -v "$PWD/$f:/etc/dockpaum/dockpaum.yml:ro" \
+              -e APPROVAL_TOKEN=smoke -e REG_USER=smoke -e REG_PASS=smoke -e UPDATE_API_TOKEN=smoke -e HTTP_API_TOKEN=smoke -e NTFY_TOPIC=smoke \
+              -e SLACK_WEBHOOK=https://hooks.slack.com/services/T000/B000/SMOKE \
+              -e SLACK_WEBHOOK_URL=https://hooks.slack.com/services/T000/B000/SMOKE \
+              -e DISCORD_WEBHOOK=https://discord.com/api/webhooks/000/smoke \
+              "$IMAGE_TAG" --validate
+          done
+      - if: github.event_name == 'push'
+        uses: docker/login-action@v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@v7.4.0
+        with:
+          context: .
+          platforms: ${{ env.PLATFORMS }}
+          pull: true
+          push: ${{ github.event_name == 'push' }}
+          provenance: mode=max
+          sbom: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - if: github.event_name == 'push'
+        uses: sigstore/cosign-installer@v4.1.0
+      - if: github.event_name == 'push'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "ghcr.io/nicolaeser/dockpaum@${DIGEST}"

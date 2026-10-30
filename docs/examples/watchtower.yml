@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/nicolaeser/dockpaum/main/dockpaum.schema.json
+
+schedule:
+  interval: 24h
+
+filters:
+  watchtower_labels: true
+
+http:
+  token: ${HTTP_API_TOKEN}
+  update_api: true
+  watchtower_compat: true

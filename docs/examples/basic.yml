@@ -1,0 +1,13 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/nicolaeser/dockpaum/main/dockpaum.schema.json
+
+schedule:
+  interval: 5m
+  timezone: Europe/Berlin
+
+update:
+  cleanup_images: true
+  compose_group: true
+  policies:
+    - id: default
+      mode: tag-follow
+      min_image_age: 1h

@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/nicolaeser/dockpaum/main/dockpaum.schema.json
+
+schedule:
+  interval: 15m
+
+update:
+  approval:
+    url: https://update-gate.example.com/v1/approve
+    timeout: 10s
+    recheck_before_stop: true
+    signing:
+      key_id: host-1
+      secret_file: /run/secrets/approval-signing-key
+    label_allowlist: ["com.example.workload-id"]
+  policies:
+    - id: default
+      mode: tag-follow
+      min_image_age: 1h
+      health_timeout: 3m

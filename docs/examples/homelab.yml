@@ -1,0 +1,18 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/nicolaeser/dockpaum/main/dockpaum.schema.json
+
+schedule:
+  cron: "0 4 * * *"
+
+update:
+  cleanup_images: true
+  policies:
+    - id: default
+      mode: tag-follow
+      min_image_age: 1d
+    - id: database
+      mode: patch
+      min_image_age: 3d
+      health_timeout: 5m
+
+audit:
+  retention: 90d

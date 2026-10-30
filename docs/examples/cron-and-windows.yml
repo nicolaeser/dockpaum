@@ -1,0 +1,30 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/nicolaeser/dockpaum/main/dockpaum.schema.json
+
+schedule:
+  cron: "*/15 * * * *"
+  timezone: Europe/Berlin
+  windows:
+    - days: [Mon-Fri]
+      times: ["02:00-06:00"]
+    - days: [Sat, Sun]
+      times: ["01:00-07:00"]
+
+update:
+  policies:
+    - id: default
+      mode: tag-follow
+      min_image_age: 30m
+      health_timeout: 90s
+      windows:
+        - days: [Mon-Fri]
+          times: ["03:00-05:00"]
+        - days: [Sat, Sun]
+          times: ["01:00-07:00"]
+    - id: critical
+      mode: patch
+      min_image_age: 6h
+      health_timeout: 5m
+      schedule: "30 3 * * SUN"
+      windows:
+        - days: [Sun]
+          times: ["03:00-05:00"]

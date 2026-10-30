@@ -1,0 +1,14 @@
+services:
+  dockpaum:
+    image: ghcr.io/nicolaeser/dockpaum:latest
+    container_name: dockpaum
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./config:/etc/dockpaum
+      - ./data:/var/lib/dockpaum
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

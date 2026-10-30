@@ -1,0 +1,1406 @@
+{
+  "$id": "https://raw.githubusercontent.com/nicolaeser/dockpaum/main/dockpaum.schema.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "ApprovalConfig": {
+      "additionalProperties": false,
+      "description": "An HTTP approval request before every update: a 2xx answer (or ok_statuses) approves unless its JSON body says \"approved\": false; a denial may name a retry time (Retry-After, retry_after_seconds). With approve_on: failure the answer is read the other way round.",
+      "properties": {
+        "approve_on": {
+          "anyOf": [
+            {
+              "enum": [
+                "success",
+                "failure"
+              ],
+              "type": "string"
+            },
+            {
+              "$ref": "#/definitions/envRef"
+            }
+          ],
+          "description": "success (default): a 2xx answer (or ok_statuses) approves. failure: the url is a status URL, and its 2xx answer (or ok_statuses) denies while any other status, or an endpoint that cannot be reached, approves; the body's approved field, Retry-After and fail_open are ignored, a signing failure still denies."
+        },
+        "fail_open": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/boolean"
+            }
+          ],
+          "description": "Approve when the endpoint cannot be reached (not recommended). No effect with approve_on: failure."
+        },
+        "header_files": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Headers whose values are read from files, read once at startup.",
+          "type": "object"
+        },
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Request headers, such as Authorization: Bearer ${TOKEN}.",
+          "type": "object"
+        },
+        "label_allowlist": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Container labels sent besides dockpaum.* and com.docker.compose.*; \"*\" sends all."
+        },
+        "method": {
+          "anyOf": [
+            {
+              "enum": [
+                "POST",
+                "PUT",
+                "PATCH",
+                "GET",
+                "HEAD",
+                "DELETE"
+              ],
+              "type": "string"
+            },
+            {
+              "$ref": "#/definitions/envRef"
+            }
+          ],
+          "description": "HTTP method. Default POST; GET, HEAD and DELETE send the request as query parameters."
+        },
+        "ok_statuses": {
+          "anyOf": [
+            {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "$ref": "#/definitions/envRef"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "$ref": "#/definitions/envRef"
+                }
+              ]
+            }
+          ],
+          "description": "Status codes that approve instead of any 2xx."
+        },
+        "recheck_before_stop": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/boolean"
+            }
+          ],
+          "description": "Ask again (phase final) after the pull and the pre-update hooks, right before the old container is stopped; a denial skips the update without stopping anything."
+        },
+        "signing": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ApprovalSigning"
+            }
+          ],
+          "description": "Sign every approval request (X-Dockpaum-Signature, DOCKPAUM-APPROVAL-V1) with an HMAC-SHA256 key."
+        },
+        "timeout": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/duration"
+            }
+          ],
+          "description": "Request timeout. Default 10s."
+        },
+        "url": {
+          "description": "Approval endpoint (http or https).",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ApprovalSigning": {
+      "additionalProperties": false,
+      "description": "The key approval requests are signed with.",
+      "properties": {
+        "key_id": {
+          "anyOf": [
+            {
+              "pattern": "^\\s*[A-Za-z0-9._-]{0,64}\\s*$",
+              "type": "string"
+            },
+            {
+              "$ref": "#/definitions/envRef"
+            }
+          ],
+          "description": "Key ID sent in X-Dockpaum-Key-Id, so the approver can accept several keys during a rotation. Default default."
+        },
+        "secret_file": {
+          "description": "File holding the HMAC secret (at least 32 bytes, surrounding whitespace trimmed), read again whenever it changes.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "AuditConfig": {
+      "additionalProperties": false,
+      "description": "The JSONL audit log of every update decision.",
+      "properties": {
+        "dir": {
+          "description": "Audit directory. Default /var/lib/dockpaum/audit.",
+          "type": "string"
+        },
+        "enabled": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/boolean"
+            }
+          ],
+          "description": "Write audit records. Default true."
+        },
+        "retention": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/duration"
+            }
+          ],
+          "description": "How long records are kept. Default 31d."
+        }
+      },
+      "type": "object"
+    },
+    "FilterConfig": {
+      "additionalProperties": false,
+      "description": "Which containers dockpaum considers.",
+      "properties": {
+        "exclude_names": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Never these container names."
+        },
+        "exclude_regex": {
+          "description": "Never container names matching this RE2 regular expression.",
+          "type": "string"
+        },
+        "include_names": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Only these container names."
+        },
+        "include_regex": {
+          "description": "Only container names matching this RE2 regular expression.",
+          "type": "string"
+        },
+        "include_stopped": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/boolean"
+            }
+          ],
+          "description": "Also consider containers that are not running; they are recreated without being started. DOCKPAUM_INCLUDE_STOPPED overrides it."
+        },
+        "label_enable": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/boolean"
+            }
+          ],
+          "description": "Opt-in mode: only containers labelled dockpaum.enable=true (or Watchtower's enable label). DOCKPAUM_LABEL_ENABLE overrides it."
+        },
+        "scope": {
+          "description": "Only containers labelled dockpaum.scope=<scope>. Unset: containers with a scope label are left to the instance that owns it. DOCKPAUM_SCOPE overrides it.",
+          "type": "string"
+        },
+        "watchtower_labels": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/boolean"
+            }
+          ],
+          "description": "Honor com.centurylinklabs.watchtower.* labels; a dockpaum.* label wins. Default true."
+        }
+      },
+      "type": "object"
+    },
+    "HTTPConfig": {
+      "additionalProperties": false,
+      "description": "The operational HTTP server.",
+      "properties": {
+        "addr": {
+          "description": "Listen address such as 127.0.0.1:8080; wins over port.",
+          "type": "string"
+        },
+        "enabled": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/boolean"
+            }
+          ],
+          "description": "Serve the operational endpoints. Default true; false opens no port at all, and --healthcheck then reports healthy. DOCKPAUM_HTTP_ENABLED overrides it."
+        },
+        "port": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "$ref": "#/definitions/envRef"
+            }
+          ],
+          "description": "Listen port. Default 8080. DOCKPAUM_HTTP_PORT overrides it, also the port in addr."
+        },
+        "read_token": {
+          "description": "Read-only bearer token for the /internal-api/ read routes (health, ready, busy, version, metrics, status, containers, summary) and /v1/metrics; it never triggers updates or checks and must differ from token. DOCKPAUM_HTTP_READ_TOKEN (or DOCKPAUM_HTTP_READ_TOKEN_FILE) overrides it.",
+          "type": "string"
+        },
+        "read_token_file": {
+          "description": "File holding the read-only token, read once at startup.",
+          "type": "string"
+        },
+        "token": {
+          "description": "Bearer token for every /internal-api/ route, health and readiness included, and for Watchtower's /v1/update and /v1/metrics; the update and check API accept only this token. Without token and read_token the read routes are open. Use ${VAR} or token_file; DOCKPAUM_HTTP_TOKEN (or DOCKPAUM_HTTP_TOKEN_FILE) overrides it.",
+          "type": "string"
+        },
+        "token_file": {
+          "description": "File holding the token (a Docker or Kubernetes secret), read once at startup.",
+          "type": "string"
+        },
+        "update_api": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/boolean"
+            }
+          ],
+          "description": "Enable POST /internal-api/v1/update (and GET or POST /v1/update with watchtower_compat) to queue a run on demand, and POST /internal-api/v1/check to queue a run that only checks and reports. Requires token. Default false. DOCKPAUM_HTTP_UPDATE_API overrides it."
+        },
+        "watchtower_compat": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/boolean"
+            }
+          ],
+          "description": "Also serve Watchtower's HTTP API routes for its clients (dashboards such as Homepage, scripts): /v1/update (needs update_api and token) and /v1/metrics (authenticated like the /internal-api/ read routes). Default false."
+        }
+      },
+      "type": "object"
+    },
+    "HookConfig": {
+      "additionalProperties": false,
+      "description": "Commands run around update runs and container updates: host commands, or exec:<container>:<command> inside a container (@self is the updated one).",
+      "properties": {
+        "disabled": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/boolean"
+            }
+          ],
+          "description": "Turn every hook off, label hooks included (not jobs)."
+        },
+        "label_hooks": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/boolean"
+            }
+          ],
+          "description": "Run commands from dockpaum.hook.* (and Watchtower lifecycle) container labels inside that container. Default false."
+        },
+        "on_failure": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "When an update fails."
+        },
+        "post_run": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Host commands after every run whose pre_run succeeded."
+        },
+        "post_update": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "After each successful update."
+        },
+        "pre_run": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Host commands before every update run; a failure aborts the run."
+        },
+        "pre_update": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Before each container update; exit code 75 skips the update."
+        },
+        "timeout": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/duration"
+            }
+          ],
+          "description": "Timeout per command. Default 60s."
+        }
+      },
+      "type": "object"
+    },
+    "HostConfig": {
+      "additionalProperties": false,
+      "description": "A Docker host.",
+      "properties": {
+        "endpoint": {
+          "description": "Empty for the environment (DOCKER_HOST, else the local socket), unix:///path, or tcp://host:2376 with tls. ssh:// is not supported.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Name in logs, metrics and jobs[].host; unique. Default host-<index>.",
+          "type": "string"
+        },
+        "tls": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TLS"
+            }
+          ],
+          "description": "TLS for a tcp:// endpoint."
+        }
+      },
+      "type": "object"
+    },
+    "JobConfig": {
+      "additionalProperties": false,
+      "description": "A script run on its own cron schedule.",
+      "properties": {
+        "commands": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Commands run in order; the first failure stops the job."
+        },
+        "cron": {
+          "description": "Cron spec, the same syntax as schedule.cron.",
+          "type": "string"
+        },
+        "host": {
+          "description": "Docker host for exec: commands; required with several hosts.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Unique job name.",
+          "type": "string"
+        },
+        "timeout": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/duration"
+            }
+          ],
+          "description": "Timeout per command. Default: hooks.timeout."
+        },
+        "timezone": {
+          "description": "Time zone of the cron. Default: the top-level timezone.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "LogConfig": {
+      "additionalProperties": false,
+      "description": "Logging.",
+      "properties": {
+        "format": {
+          "anyOf": [
+            {
+              "enum": [
+                "json",
+                "text"
+              ],
+              "type": "string"
+            },
+            {
+              "$ref": "#/definitions/envRef"
+            }
+          ],
+          "description": "json or text. Default json. DOCKPAUM_LOG_FORMAT overrides it."
+        },
+        "level": {
+          "anyOf": [
+            {
+              "enum": [
+                "debug",
+                "info",
+                "warn",
+                "warning",
+                "error"
+              ],
+              "type": "string"
+            },
+            {
+              "$ref": "#/definitions/envRef"
+            }
+          ],
+          "description": "debug, info, warn or error. Default info. DOCKPAUM_LOG_LEVEL overrides it."
+        }
+      },
+      "type": "object"
+    },
+    "NotifierConfig": {
+      "additionalProperties": false,
+      "description": "A notification channel. With a service URL (discord://, ntfy://, smtp://, ...) or a Discord, Slack or Teams workflow webhook URL, type may be left out.",
+      "properties": {
+        "channel": {
+          "description": "Slack channel override, the Telegram chat id, the Pushover device(s), or the Apprise tags.",
+          "type": "string"
+        },
+        "events": {
+          "anyOf": [
+            {
+              "items": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "update.success",
+                      "update.failure",
+                      "update.available",
+                      "update.skipped",
+                      "update.denied",
+                      "update.rolled_back",
+                      "update.recovered",
+                      "check.failed",
+                      "self_update.started",
+                      "self_update.success",
+                      "self_update.failure",
+                      "run.started",
+                      "run.completed",
+                      "dockpaum.started",
+                      "dockpaum.stopping",
+                      "notify.test",
+                      "*"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "$ref": "#/definitions/envRef"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            {
+              "anyOf": [
+                {
+                  "enum": [
+                    "update.success",
+                    "update.failure",
+                    "update.available",
+                    "update.skipped",
+                    "update.denied",
+                    "update.rolled_back",
+                    "update.recovered",
+                    "check.failed",
+                    "self_update.started",
+                    "self_update.success",
+                    "self_update.failure",
+                    "run.started",
+                    "run.completed",
+                    "dockpaum.started",
+                    "dockpaum.stopping",
+                    "notify.test",
+                    "*"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/definitions/envRef"
+                }
+              ]
+            }
+          ],
+          "description": "Events to deliver; * means all. Empty means update.success, update.failure and run.completed, the latter only for runs that changed, failed or found something new. The events: update.success, update.failure, update.available (dry-run, monitor-only), update.skipped (held back by a gate), update.denied (approval denied), update.rolled_back, update.recovered (an interrupted update recovered, a network reattached), check.failed (registry check failed or incomplete), self_update.started, self_update.success, self_update.failure, run.started, run.completed, dockpaum.started, dockpaum.stopping and notify.test."
+        },
+        "from": {
+          "description": "Email sender.",
+          "type": "string"
+        },
+        "header_files": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Headers whose values are read from files, read once at startup.",
+          "type": "object"
+        },
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Extra HTTP headers (webhook, apprise).",
+          "type": "object"
+        },
+        "name": {
+          "description": "Name in logs and metrics. Default: the type.",
+          "type": "string"
+        },
+        "once": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/boolean"
+            }
+          ],
+          "description": "Report each standing notice (an available update in dry-run or monitor-only, a skipped or denied update, an incomplete check) once until it changes; false repeats it every run. Default true."
+        },
+        "room": {
+          "description": "Matrix room ID (!id:server) or alias (#alias:server).",
+          "type": "string"
+        },
+        "smtp": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/SMTPConfig"
+            }
+          ],
+          "description": "SMTP server of an email channel."
+        },
+        "to": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Email recipients, or the Apprise service URLs of an apprise channel."
+        },
+        "token": {
+          "description": "Bot token (telegram), application token (gotify, pushover), access token (matrix) or bearer token (ntfy, webhook).",
+          "type": "string"
+        },
+        "token_file": {
+          "description": "File holding the token, read once at startup.",
+          "type": "string"
+        },
+        "type": {
+          "anyOf": [
+            {
+              "enum": [
+                "webhook",
+                "slack",
+                "discord",
+                "teams",
+                "telegram",
+                "ntfy",
+                "gotify",
+                "email",
+                "pushover",
+                "matrix",
+                "apprise"
+              ],
+              "type": "string"
+            },
+            {
+              "$ref": "#/definitions/envRef"
+            }
+          ],
+          "description": "Channel type; may be left out with a service URL or a well-known webhook URL."
+        },
+        "url": {
+          "description": "Webhook URL, the ntfy topic URL, the Gotify or Matrix server, the Apprise API endpoint, or a service URL. Use ${VAR} or url_file.",
+          "type": "string"
+        },
+        "url_file": {
+          "description": "File holding the URL, read once at startup.",
+          "type": "string"
+        },
+        "user": {
+          "description": "Pushover user or group key.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "Policy": {
+      "additionalProperties": false,
+      "description": "An update policy. A container selects it with the label dockpaum.policy=<id>.",
+      "properties": {
+        "health_timeout": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/duration"
+            }
+          ],
+          "description": "How long the new container has to turn healthy, else the update fails and is rolled back (rollback_on_failure); one without a healthcheck must keep running through a grace period of up to 15s. Default 2m; 0s turns the health gate off. DOCKPAUM_HEALTH_TIMEOUT sets it for the default policy."
+        },
+        "hooks": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/PolicyHooks"
+            }
+          ],
+          "description": "Commands for containers of this policy, after the global hooks of the same phase."
+        },
+        "id": {
+          "description": "Policy id, matched case-insensitively. Empty or default is the fallback for unlabelled containers; none and off are reserved. An id equal to a built-in (tag-follow, patch, minor, major, monitor) replaces it.",
+          "type": "string"
+        },
+        "min_image_age": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/duration"
+            }
+          ],
+          "description": "Skip a new image younger than this (soak time). Default 1h (the config dockpaum init writes sets 0s); 0s turns it off. DOCKPAUM_MIN_IMAGE_AGE sets it for the default policy."
+        },
+        "min_image_age_source": {
+          "anyOf": [
+            {
+              "enum": [
+                "auto",
+                "first_seen",
+                "created"
+              ],
+              "type": "string"
+            },
+            {
+              "$ref": "#/definitions/envRef"
+            }
+          ],
+          "description": "How min_image_age is measured: auto (the image's creation time, or when dockpaum first saw the image if that time is unusable, as with reproducible builds), first_seen (from when dockpaum first saw the image, unless it was built later; needs a persistent state) or created (the creation time only). Default auto."
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "enum": [
+                "tag-follow",
+                "patch",
+                "minor",
+                "major",
+                "none",
+                "digest"
+              ],
+              "type": "string"
+            },
+            {
+              "$ref": "#/definitions/envRef"
+            }
+          ],
+          "description": "tag-follow follows the digest of the current tag; patch, minor and major move to newer version tags within that range; none never checks or updates. digest is another name for tag-follow. Default tag-follow. DOCKPAUM_MODE sets it for the default policy."
+        },
+        "monitor_only": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/boolean"
+            }
+          ],
+          "description": "Check for updates and report them (audit decision monitor-only, event update.available), never recreate. Unlike mode none, which never checks."
+        },
+        "schedule": {
+          "description": "The policy's own cron spec: its containers are left out of regular runs and updated when it fires.",
+          "type": "string"
+        },
+        "tags": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TagFilter"
+            }
+          ],
+          "description": "Narrow (include, exclude) and reshape (transform) the version tags patch, minor and major consider."
+        },
+        "timezone": {
+          "description": "Time zone of this policy's windows and schedule. Default: the top-level timezone.",
+          "type": "string"
+        },
+        "windows": {
+          "description": "Maintenance windows: containers of this policy are updated only inside them.",
+          "items": {
+            "$ref": "#/definitions/WindowSpec"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "PolicyHooks": {
+      "additionalProperties": false,
+      "description": "Commands for containers of a policy.",
+      "properties": {
+        "on_failure": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "When an update fails."
+        },
+        "post_update": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "After each successful update."
+        },
+        "pre_update": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Before each update of a container of this policy."
+        }
+      },
+      "type": "object"
+    },
+    "RegistryAuth": {
+      "additionalProperties": false,
+      "description": "Credentials for a registry, or for one repository path on it.",
+      "properties": {
+        "password": {
+          "description": "Password or token. Use ${VAR} or password_file.",
+          "type": "string"
+        },
+        "password_file": {
+          "description": "File holding the password or token, read on every use so a rotated token needs no restart.",
+          "type": "string"
+        },
+        "server": {
+          "description": "Registry host, optionally with a repository path (ghcr.io/acme) to scope the credentials.",
+          "type": "string"
+        },
+        "username": {
+          "description": "User name. Required with password_file.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "SMTPConfig": {
+      "additionalProperties": false,
+      "description": "SMTP server of an email channel.",
+      "properties": {
+        "host": {
+          "description": "SMTP host.",
+          "type": "string"
+        },
+        "password": {
+          "description": "SMTP password. Use ${VAR} or password_file.",
+          "type": "string"
+        },
+        "password_file": {
+          "description": "File holding the SMTP password, read once at startup.",
+          "type": "string"
+        },
+        "port": {
+          "anyOf": [
+            {
+              "maximum": 65535,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "$ref": "#/definitions/envRef"
+            }
+          ],
+          "description": "SMTP port, 1 to 65535. Default 587; 465 uses implicit TLS."
+        },
+        "starttls": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/boolean"
+            }
+          ],
+          "description": "Require STARTTLS; without it, STARTTLS is used only when the server offers it."
+        },
+        "username": {
+          "description": "SMTP user name.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "ScheduleConfig": {
+      "additionalProperties": false,
+      "description": "When update runs happen.",
+      "properties": {
+        "cron": {
+          "description": "Cron spec: five fields (\"0 4 * * *\"), six with seconds first, or a descriptor such as @daily or @every 6h. A CRON_TZ=<zone> prefix overrides the time zone. Exclusive with interval.",
+          "type": "string"
+        },
+        "interval": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/duration"
+            }
+          ],
+          "description": "Run interval when no cron is set. Default 5m."
+        },
+        "run_on_start": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/boolean"
+            }
+          ],
+          "description": "Also run once right at startup. Default: true in interval mode; in cron mode only while dry_run is on."
+        },
+        "timezone": {
+          "description": "Time zone of the cron and the global windows. Default: the top-level timezone.",
+          "type": "string"
+        },
+        "windows": {
+          "description": "Global maintenance windows: scheduled runs and policy schedules outside them do not start. Runs started through the API or with --once, and jobs, are not held back.",
+          "items": {
+            "$ref": "#/definitions/WindowSpec"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "SelfUpdateConfig": {
+      "additionalProperties": false,
+      "description": "How dockpaum updates its own container, through a helper container.",
+      "properties": {
+        "delay": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/duration"
+            }
+          ],
+          "description": "How long the helper waits before replacing dockpaum. Default 5s."
+        },
+        "enabled": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/boolean"
+            }
+          ],
+          "description": "Let dockpaum update its own container. Default false. DOCKPAUM_SELF_UPDATE overrides it."
+        },
+        "helper_image": {
+          "description": "Image of the helper container. Default: the new dockpaum image.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "StateConfig": {
+      "additionalProperties": false,
+      "description": "Where dockpaum keeps its durable state.",
+      "properties": {
+        "dir": {
+          "anyOf": [
+            {
+              "pattern": "^\\s*(/|$)",
+              "type": "string"
+            },
+            {
+              "$ref": "#/definitions/envRef"
+            }
+          ],
+          "description": "Directory of state.json, an absolute path; mount it as a volume to keep the state across restarts and self-updates. Default /var/lib/dockpaum/state. DOCKPAUM_STATE_DIR overrides it."
+        },
+        "enabled": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/boolean"
+            }
+          ],
+          "description": "Keep state on disk. Default true; false keeps it in memory only."
+        }
+      },
+      "type": "object"
+    },
+    "TLS": {
+      "additionalProperties": false,
+      "description": "TLS for a tcp:// Docker host.",
+      "properties": {
+        "ca_cert": {
+          "description": "CA certificate file.",
+          "type": "string"
+        },
+        "client_cert": {
+          "description": "Client certificate file.",
+          "type": "string"
+        },
+        "client_key": {
+          "description": "Client key file.",
+          "type": "string"
+        },
+        "insecure": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/boolean"
+            }
+          ],
+          "description": "Skip certificate verification (not recommended); verify wins when both are set."
+        },
+        "verify": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/boolean"
+            }
+          ],
+          "description": "Verify the server certificate. Default true."
+        }
+      },
+      "type": "object"
+    },
+    "TagFilter": {
+      "additionalProperties": false,
+      "description": "Tag rules: RE2 regular expressions over version tags, matched anywhere in the tag (anchor with ^ and $), and a transform.",
+      "properties": {
+        "exclude": {
+          "description": "A candidate tag must not match this.",
+          "type": "string"
+        },
+        "include": {
+          "description": "A candidate tag must match this, when set.",
+          "type": "string"
+        },
+        "transform": {
+          "description": "Rewrite a tag into the version that is compared: \"<regex> => <template>\", such as \"^release-(.+)$ => $1\". The template names groups as $1, ${1} or $${name} (the $$ keeps ${name} from being read as an environment variable). A tag the regex does not match is compared unchanged.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "UpdatePolicy": {
+      "additionalProperties": false,
+      "description": "How containers are updated.",
+      "properties": {
+        "approval": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ApprovalConfig"
+            }
+          ],
+          "description": "An HTTP approval request before every update."
+        },
+        "cleanup_images": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/boolean"
+            }
+          ],
+          "description": "Remove the old image after an update when no tag or container still uses it. DOCKPAUM_CLEANUP overrides it."
+        },
+        "compose_group": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/boolean"
+            }
+          ],
+          "description": "Update the containers of each Compose project one after another, ordered by depends_on; strategy parallel then has no effect."
+        },
+        "concurrency": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "$ref": "#/definitions/envRef"
+            }
+          ],
+          "description": "Parallel updates with strategy parallel. Default 1."
+        },
+        "policies": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/definitions/Policy"
+              },
+              "type": "array"
+            },
+            {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/Policy"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "description": "Map form: policy settings keyed by policy id.",
+              "type": "object"
+            }
+          ],
+          "description": "Update policies, as a list or as a mapping keyed by policy id. A container follows the policy its dockpaum.policy label names, else the default policy: a configured one, else the built-in tag-follow, patch, minor, major or monitor, which take min_image_age, health_timeout and windows from the default policy; none and off leave it alone."
+        },
+        "restart_unchanged": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/boolean"
+            }
+          ],
+          "description": "Recreate containers even when their image did not change."
+        },
+        "rollback_on_failure": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/boolean"
+            }
+          ],
+          "description": "Restore the old container when the new one fails to start or turn healthy. Default true. DOCKPAUM_ROLLBACK overrides it."
+        },
+        "self_update": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/SelfUpdateConfig"
+            }
+          ],
+          "description": "How dockpaum updates its own container."
+        },
+        "stop_timeout": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/duration"
+            }
+          ],
+          "description": "Graceful stop timeout of the old container; a longer stop timeout set on the container wins. Default 30s."
+        },
+        "strategy": {
+          "anyOf": [
+            {
+              "enum": [
+                "rolling",
+                "parallel"
+              ],
+              "type": "string"
+            },
+            {
+              "$ref": "#/definitions/envRef"
+            }
+          ],
+          "description": "rolling (one at a time) or parallel (up to concurrency; not with compose_group). Default rolling."
+        }
+      },
+      "type": "object"
+    },
+    "WindowSpec": {
+      "additionalProperties": false,
+      "description": "A maintenance window: days and time ranges.",
+      "properties": {
+        "days": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Days: mon to sun, ranges such as Mon-Fri, or all, weekdays, weekends. Empty means every day."
+        },
+        "times": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Time ranges HH:MM-HH:MM (22:00-02:00 crosses midnight), or always. Empty means all day."
+        }
+      },
+      "type": "object"
+    },
+    "boolean": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "enum": [
+            "y",
+            "Y",
+            "yes",
+            "Yes",
+            "YES",
+            "on",
+            "On",
+            "ON",
+            "n",
+            "N",
+            "no",
+            "No",
+            "NO",
+            "off",
+            "Off",
+            "OFF"
+          ],
+          "type": "string"
+        },
+        {
+          "$ref": "#/definitions/envRef"
+        }
+      ],
+      "description": "true or false; the YAML 1.1 spellings yes/no, on/off and y/n are accepted too."
+    },
+    "duration": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "pattern": "^\\s*[+-]?(?:(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:ns|us|µs|μs|ms|s|m|h|d|D|w|W))+\\s*$|^\\s*\\d+\\s*$",
+          "type": "string"
+        },
+        {
+          "$ref": "#/definitions/envRef"
+        }
+      ],
+      "description": "A duration: 30s, 5m, 1h30m, 1d or 2w (Go syntax with d and w), or whole seconds."
+    },
+    "envRef": {
+      "description": "A reference to an environment variable (${VAR}, ${VAR:-default}, $VAR), expanded when the configuration loads.",
+      "pattern": "(?:^|[^$])(?:\\$\\$)*\\$(?:\\{[A-Za-z_][A-Za-z0-9_]*(?::?[-?+][^}]*)?\\}|[A-Za-z_][A-Za-z0-9_]*)",
+      "type": "string"
+    }
+  },
+  "description": "Configuration of dockpaum, the policy-driven Docker container updater (dockpaum.yml). Values may reference environment variables as ${VAR}.",
+  "properties": {
+    "audit": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AuditConfig"
+        }
+      ],
+      "description": "The JSONL audit log of every update decision."
+    },
+    "docker_config": {
+      "description": "Path of a Docker config.json whose inline auths are added after the registry entries, which win for the same server; credential stores and helpers are not supported. Default: config.json in $DOCKER_CONFIG when that is set.",
+      "type": "string"
+    },
+    "dry_run": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/boolean"
+        }
+      ],
+      "description": "Check and report what would be updated, change nothing; jobs and pre_run/post_run hooks are skipped. Default false. DOCKPAUM_DRY_RUN overrides it; --dry-run and DOCKPAUM_WATCHTOWER_ENV=true turn it on."
+    },
+    "filters": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/FilterConfig"
+        }
+      ],
+      "description": "Which containers dockpaum considers."
+    },
+    "hooks": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HookConfig"
+        }
+      ],
+      "description": "Commands run around update runs and container updates."
+    },
+    "hosts": {
+      "description": "Docker hosts. Default: one host named local, reached through the environment (DOCKER_HOST, else the local socket).",
+      "items": {
+        "$ref": "#/definitions/HostConfig"
+      },
+      "type": "array"
+    },
+    "http": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HTTPConfig"
+        }
+      ],
+      "description": "The operational HTTP server: health, readiness, busy, version, metrics and the v1 API under /internal-api/."
+    },
+    "instance": {
+      "anyOf": [
+        {
+          "maxLength": 64,
+          "type": "string"
+        },
+        {
+          "$ref": "#/definitions/envRef"
+        }
+      ],
+      "description": "Name of this dockpaum instance in notifications and status: up to 64 characters, no line breaks, tabs or control characters. Default: the host name. DOCKPAUM_INSTANCE overrides it."
+    },
+    "jobs": {
+      "description": "Scripts run on their own cron schedule, independent of updates and maintenance windows; skipped while dry_run is on.",
+      "items": {
+        "$ref": "#/definitions/JobConfig"
+      },
+      "type": "array"
+    },
+    "log": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/LogConfig"
+        }
+      ],
+      "description": "Logging."
+    },
+    "notify": {
+      "description": "Notification channels. DOCKPAUM_NOTIFY_URLS adds channels from service URLs; DOCKPAUM_NOTIFY_EVENTS sets the events of channels that list none.",
+      "items": {
+        "$ref": "#/definitions/NotifierConfig"
+      },
+      "type": "array"
+    },
+    "registry": {
+      "description": "Registry credentials; the most specific server entry wins.",
+      "items": {
+        "$ref": "#/definitions/RegistryAuth"
+      },
+      "type": "array"
+    },
+    "schedule": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ScheduleConfig"
+        },
+        {
+          "description": "Shorthand: an interval (1h, 1d) or a cron spec (\"0 4 * * *\").",
+          "type": "string"
+        },
+        {
+          "description": "Shorthand: an interval in seconds.",
+          "type": "integer"
+        }
+      ],
+      "description": "When update runs happen: a mapping, or the shorthand of an interval (1h) or a cron spec (\"0 4 * * *\"). DOCKPAUM_SCHEDULE overrides it."
+    },
+    "state": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/StateConfig"
+        }
+      ],
+      "description": "The durable state file: soak first-seen times, image defaults, notification ledger and previous images."
+    },
+    "timezone": {
+      "description": "IANA time zone (Europe/Berlin) of schedules, maintenance windows, policies and jobs that set none of their own. Default: schedule.timezone, else the TZ environment variable, else UTC. DOCKPAUM_TIMEZONE overrides it.",
+      "type": "string"
+    },
+    "update": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/UpdatePolicy"
+        }
+      ],
+      "description": "How containers are updated."
+    }
+  },
+  "title": "dockpaum configuration",
+  "type": "object"
+}

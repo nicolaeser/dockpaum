@@ -1,0 +1,1877 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "dockpaum HTTP API",
+    "version": "1",
+    "description": "dockpaum is a policy-driven Docker container updater. Its HTTP API serves health and readiness probes, a busy flag, version information, Prometheus metrics, status documents for dashboards, and triggers that queue an update or check run.\n\n## Listener and base path\n\nOne plain-HTTP server listens on `:8080` by default (port 8080 on every interface of the container). `http.addr` binds one address such as `127.0.0.1:8080` and takes precedence over `http.port`, which changes only the port; `DOCKPAUM_HTTP_PORT` changes the port of either. `http.enabled: false` (`DOCKPAUM_HTTP_ENABLED=false`) switches the server off: then nothing listens and none of these routes exist.\n\ndockpaum's own routes live under the base path `/internal-api`, the versioned documents and triggers under `/internal-api/v1`. The only routes outside it are Watchtower's `/v1/update` and `/v1/metrics` (see below).\n\nPut a TLS reverse proxy in front when the port is reachable over a network: tokens travel in clear text otherwise.\n\n## Authentication\n\nSend a token as `Authorization: Bearer <token>`. The word `Bearer` is matched case-insensitively, the token exactly. Two tokens grant different access:\n\n| Access | Accepted tokens | Operations |\n|---|---|---|\n| read | `http.token` or `http.read_token`. When neither is configured, no token is needed. | `/internal-api/health`, `/ready`, `/busy`, `/version`, `/metrics`, `/v1/status`, `/v1/summary`, `/v1/containers`; Watchtower's `/v1/metrics` |\n| write | `http.token` only | `/internal-api/v1/update`, `/internal-api/v1/check`; Watchtower's `/v1/update` |\n\nEach operation names its access in the `x-dockpaum-access` extension (`read` or `write`) and in its description. A missing or wrong token gets 401 with `WWW-Authenticate: Bearer realm=\"dockpaum\"`. The read token sent to a write operation gets 403. While `http.token` is not configured, write operations answer 404 to everyone.\n\nThe tokens come from `http.token` and `http.read_token`, from files (`http.token_file`, `http.read_token_file`), or from `DOCKPAUM_HTTP_TOKEN` and `DOCKPAUM_HTTP_READ_TOKEN` (or their `_FILE` variants). `http.read_token` must differ from `http.token`.\n\n## Triggers\n\n`POST /internal-api/v1/update` and `POST /internal-api/v1/check` queue a run and answer at once with `{\"status\": ...}`; they do not wait for the run. They exist only with `http.update_api: true` (`DOCKPAUM_HTTP_UPDATE_API`), which requires `http.token`. Otherwise they answer 404.\n\n## Watchtower compatibility\n\nWith `http.watchtower_compat: true`, dockpaum also serves Watchtower's `GET`/`POST /v1/update` (write access and `http.update_api: true`, like `/internal-api/v1/update`) and `GET /v1/metrics` (read access), so scripts and dashboards written for Watchtower keep working. Without it, both paths answer 404.\n\n## Errors\n\nTrigger results are JSON. Every other error body is one line of plain text (`text/plain; charset=utf-8`) followed by a newline, such as `unauthorized`."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8080",
+      "description": "The default listen address `:8080`, reached from the same host. Inside the container use `http://127.0.0.1:8080`; from elsewhere, the published port or the reverse proxy in front of it."
+    }
+  ],
+  "tags": [
+    {
+      "name": "health",
+      "description": "Liveness and readiness probes."
+    },
+    {
+      "name": "status",
+      "description": "Version, busy flag and the status documents: hosts and the last run, dashboard numbers, and what dockpaum last decided about each container."
+    },
+    {
+      "name": "metrics",
+      "description": "Prometheus metrics."
+    },
+    {
+      "name": "triggers",
+      "description": "Queue an update or check run. Needs `http.token` and `http.update_api: true`."
+    },
+    {
+      "name": "watchtower",
+      "description": "Watchtower-compatible routes, served only with `http.watchtower_compat: true`."
+    }
+  ],
+  "paths": {
+    "/internal-api/health": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "operationId": "getHealth",
+        "summary": "Liveness probe",
+        "description": "Answers `ok` while the dockpaum process runs and serves HTTP. It checks nothing else; use `/internal-api/ready` to also check the scheduler and the Docker hosts. The image's `HEALTHCHECK` (`dockpaum --healthcheck`) calls this route.\n\n**Access: read.** Open when neither `http.token` nor `http.read_token` is configured; otherwise one of them is required.",
+        "x-dockpaum-access": "read",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "dockpaum is running.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "const": "ok",
+                  "description": "Always `ok`, without a trailing newline."
+                },
+                "example": "ok"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/internal-api/ready": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "operationId": "getReady",
+        "summary": "Readiness probe",
+        "description": "Answers `ready` when dockpaum can do its job now: the scheduler runs, dockpaum is not shutting down, and every configured Docker host is connected and answers a ping, all pings within 2 seconds. It does not wait for a completed run, which in cron mode can be a day away. Otherwise it answers 503 with the reason, so load balancers and orchestrators stop routing to an instance that is going away.\n\n**Access: read.** Open when neither `http.token` nor `http.read_token` is configured; otherwise one of them is required.",
+        "x-dockpaum-access": "read",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ready.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "const": "ready",
+                  "description": "Always `ready`, without a trailing newline."
+                },
+                "example": "ready"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "description": "Not ready. The body is `not ready: ` followed by the reason: `scheduler not started` (also once the scheduler has stopped at shutdown), `shutting down`, `docker host(s) unreachable: <names>`, or `host <name>: ` and the error of the failed Docker ping.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlainTextError"
+                },
+                "examples": {
+                  "starting": {
+                    "summary": "The scheduler is not running: not started yet, or stopped at shutdown",
+                    "value": "not ready: scheduler not started\n"
+                  },
+                  "shuttingDown": {
+                    "summary": "dockpaum received a stop signal",
+                    "value": "not ready: shutting down\n"
+                  },
+                  "hostDown": {
+                    "summary": "A configured Docker host is unreachable",
+                    "value": "not ready: docker host(s) unreachable: edge\n"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal-api/busy": {
+      "get": {
+        "tags": [
+          "status"
+        ],
+        "operationId": "getBusy",
+        "summary": "Whether a run is in progress",
+        "description": "Reports whether a run is in progress (scheduled or requested, update or check), and if so which one. It answers 200 whether or not a run is going, so scripts can poll it, for example to wait until a triggered run has finished or before stopping the Docker host. `run_id` and `started_at` are present only while a run is going. `HEAD` is accepted too; other methods get 405.\n\n**Access: read.** Open when neither `http.token` nor `http.read_token` is configured; otherwise one of them is required.",
+        "x-dockpaum-access": "read",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The busy state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Busy"
+                },
+                "examples": {
+                  "idle": {
+                    "summary": "No run in progress",
+                    "value": {
+                      "busy": false
+                    }
+                  },
+                  "busy": {
+                    "summary": "A run in progress",
+                    "value": {
+                      "busy": true,
+                      "run_id": "f4e1d70ff4d3862c",
+                      "started_at": "2026-10-30T13:49:09Z"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowedGetHead"
+          }
+        }
+      }
+    },
+    "/internal-api/version": {
+      "get": {
+        "tags": [
+          "status"
+        ],
+        "operationId": "getVersion",
+        "summary": "Build information",
+        "description": "The release, commit and build date of the running binary, the Go version it was built with, and its platform. The same document as `dockpaum version --json`.\n\n**Access: read.** Open when neither `http.token` nor `http.read_token` is configured; otherwise one of them is required.",
+        "x-dockpaum-access": "read",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Build information.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Version"
+                },
+                "example": {
+                  "version": "v2026.10.30.1a2b3c4",
+                  "commit": "1a2b3c4",
+                  "date": "2026-10-30T09:12:44Z",
+                  "go": "go1.27.3",
+                  "platform": "linux/amd64"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowedGetHead"
+          }
+        }
+      }
+    },
+    "/internal-api/metrics": {
+      "get": {
+        "tags": [
+          "metrics"
+        ],
+        "operationId": "getMetrics",
+        "summary": "Prometheus metrics",
+        "description": "Prometheus metrics in the text exposition format, served as `Content-Type: text/plain; version=0.0.4; charset=utf-8; escaping=underscores`. A scraper that asks for the protobuf format in its `Accept` header gets that instead; OpenMetrics is not offered. The body is gzip-compressed when the request accepts it.\n\nBesides the standard `go_*` and `process_*` metrics, dockpaum exports:\n\n| Metric | Labels | Meaning |\n|---|---|---|\n| `dockpaum_runs_total` | | Runs started, check runs included. |\n| `dockpaum_run_failures_total` | | Runs that ended with an error. |\n| `dockpaum_run_duration_seconds` | | Duration of runs (histogram). |\n| `dockpaum_last_run_timestamp_seconds` | | Unix time of the last completed run. |\n| `dockpaum_last_successful_run_timestamp_seconds` | | Unix time of the last regular run that completed without errors; 0 until one has. |\n| `dockpaum_containers_scanned` | | Containers scanned in the last regular run. |\n| `dockpaum_container_updates_total` | `host`, `container`, `policy` | Successful container updates, including completed self-updates (counted when the next dockpaum records them). |\n| `dockpaum_container_update_failures_total` | `host`, `container`, `policy` | Failed container updates, including failed self-updates. |\n| `dockpaum_container_update_skipped_total` | `host`, `container`, `policy`, `reason` | Updates held back by a gate (`gated-window`, `gated-min-age`, `approval-denied`, `gated-digest-pin`, `gated-policy`, `monitor-only`, `gated-autoremove`, `gated-orchestrated`, `gated-mac-address`). |\n| `dockpaum_container_update_available` | `host`, `container`, `policy` | 1 while a newer image is available but not applied, else 0. |\n| `dockpaum_container_image_age_seconds` | `host`, `container`, `policy` | Age of the image the container runs. |\n| `dockpaum_hosts_unreachable` | | Configured Docker hosts that could not be reached in the last run. |\n| `dockpaum_registry_calls_total` | `registry`, `result` | Registry tag-listing calls (`ok`, `auth`, `error`, `rate_limited`). |\n| `dockpaum_registry_auth_calls_total` | `registry`, `result` | Registry token exchanges (`ok`, `error`). |\n| `dockpaum_registry_manifest_calls_total` | `registry`, `result` | Registry manifest and image-config blob calls (`ok`, `auth`, `error`, `rate_limited`). |\n| `dockpaum_registry_ratelimit_limit` | `registry`, `account` | Request quota the registry last advertised. |\n| `dockpaum_registry_ratelimit_remaining` | `registry`, `account` | Requests left in that quota. |\n| `dockpaum_notifier_failures_total` | `name` | Failed notification deliveries. |\n| `dockpaum_audit_write_failures_total` | | Failed writes to the audit log. |\n| `dockpaum_state_write_failures_total` | | Failed writes of the state file. |\n| `dockpaum_job_runs_total` | `job`, `result` | Scheduled job runs (`ok`, `error`, `dry_run`). |\n| `dockpaum_api_triggers_total` | `result` | Runs requested through the trigger routes (`queued`, `already_queued`, `too_many_queued`, `unavailable`). |\n| `dockpaum_approval_requests_total` | `host`, `phase`, `result` | Approval requests (`initial`/`final`; `approved`, `denied`, `error`). |\n| `dockpaum_approval_holds_total` | `host` | Containers not asked about because the approver's retry time had not passed. |\n| `dockpaum_dry_run` | | 1 in dry-run mode, else 0. |\n| `dockpaum_start_time_seconds` | | Unix time dockpaum started. |\n| `dockpaum_build_info` | `version`, `commit` | Always 1. |\n\nA labelled metric has no series until it has a value for some label set.\n\n**Access: read.** Open when neither `http.token` nor `http.read_token` is configured; otherwise one of them is required, for example through Prometheus' `authorization.credentials`.",
+        "x-dockpaum-access": "read",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The metrics, in the Prometheus text format unless the `Accept` header asked for protobuf.",
+            "content": {
+              "text/plain; version=0.0.4": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrometheusText"
+                },
+                "example": "# HELP dockpaum_container_update_available 1 while a newer image is available for the container but not applied, else 0\n# TYPE dockpaum_container_update_available gauge\ndockpaum_container_update_available{container=\"api\",host=\"local\",policy=\"release\"} 1\n# HELP dockpaum_last_successful_run_timestamp_seconds Unix time of the last regular run that completed without errors (0 until one has)\n# TYPE dockpaum_last_successful_run_timestamp_seconds gauge\ndockpaum_last_successful_run_timestamp_seconds 1.793332841e+09\n# HELP dockpaum_runs_total Total update runs executed\n# TYPE dockpaum_runs_total counter\ndockpaum_runs_total 42\n"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/internal-api/v1/status": {
+      "get": {
+        "tags": [
+          "status"
+        ],
+        "operationId": "getStatus",
+        "summary": "Hosts, last run and next run",
+        "description": "The configured Docker hosts and whether they are connected, the last finished run, whether a run is going, the next scheduled run and the number of pending updates. `HEAD` is accepted too; other methods get 405.\n\n**Access: read.** Open when neither `http.token` nor `http.read_token` is configured; otherwise one of them is required.",
+        "x-dockpaum-access": "read",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The status document.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                },
+                "example": {
+                  "version": "v2026.10.30.1a2b3c4",
+                  "hosts": [
+                    {
+                      "name": "local",
+                      "connected": true
+                    }
+                  ],
+                  "last_run": {
+                    "id": "9f2c41d07ab3e815",
+                    "trigger": "schedule",
+                    "started": "2026-10-30T04:00:00Z",
+                    "finished": "2026-10-30T04:00:41Z",
+                    "scanned": 14,
+                    "updated": 2,
+                    "failed": 0,
+                    "skipped": 3
+                  },
+                  "instance": "nas-1",
+                  "dry_run": false,
+                  "running": false,
+                  "first_run_pending": false,
+                  "next_run_at": "2026-10-30T04:05:41Z",
+                  "pending_updates": 1
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowedGetHead"
+          }
+        }
+      }
+    },
+    "/internal-api/v1/summary": {
+      "get": {
+        "tags": [
+          "status"
+        ],
+        "operationId": "getSummary",
+        "summary": "Numbers for dashboards",
+        "description": "A few counts for a dashboard tile or a home automation sensor: managed containers, pending and gated updates, and the updates and failures of the last 24 hours (from the audit records; with `audit.enabled: false`, only those since dockpaum started). Every field is always present; `next_run_at` is `null` while unknown. `HEAD` is accepted too; other methods get 405.\n\n**Access: read.** Open when neither `http.token` nor `http.read_token` is configured; otherwise one of them is required.",
+        "x-dockpaum-access": "read",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The summary.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Summary"
+                },
+                "examples": {
+                  "scheduled": {
+                    "summary": "With a known next run",
+                    "value": {
+                      "monitored": 12,
+                      "pending_updates": 3,
+                      "gated": 2,
+                      "updated_24h": 4,
+                      "failed_24h": 1,
+                      "dry_run": false,
+                      "next_run_at": "2026-10-17T04:00:00Z",
+                      "version": "v2026.10.16.1a2b3c4",
+                      "instance": "edge-1"
+                    }
+                  },
+                  "empty": {
+                    "summary": "Nothing recorded yet, next run unknown",
+                    "value": {
+                      "monitored": 0,
+                      "pending_updates": 0,
+                      "gated": 0,
+                      "updated_24h": 0,
+                      "failed_24h": 0,
+                      "dry_run": false,
+                      "next_run_at": null,
+                      "version": "dev",
+                      "instance": "host"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowedGetHead"
+          }
+        }
+      }
+    },
+    "/internal-api/v1/containers": {
+      "get": {
+        "tags": [
+          "status"
+        ],
+        "operationId": "listContainers",
+        "summary": "What dockpaum last decided about each container",
+        "description": "One entry per managed container, sorted by host and container name: its policy, the image it runs, the newer image if one was found, the last decision with its reason, and when the update can happen. Every run that processes a container updates its entry, dry runs and checks included; with the state file (`state.enabled`, on by default), the entries survive restarts. Each run drops the entries of containers on its hosts that were removed, are stopped (unless `filters.include_stopped`) or are excluded by filters.\n\nThe filters combine: an entry must match every given filter. `HEAD` is accepted too; other methods get 405.\n\n**Access: read.** Open when neither `http.token` nor `http.read_token` is configured; otherwise one of them is required.",
+        "x-dockpaum-access": "read",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ListHost"
+          },
+          {
+            "$ref": "#/components/parameters/ListContainer"
+          },
+          {
+            "$ref": "#/components/parameters/ListPending"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The matching containers; an empty list when none match.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContainerList"
+                },
+                "example": {
+                  "containers": [
+                    {
+                      "host": "local",
+                      "container": "api",
+                      "container_id": "4f9a1c2b7d3e8f60a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718",
+                      "image": "ghcr.io/acme/api:2.3.1",
+                      "policy": "release",
+                      "policy_source": "label dockpaum.policy=release",
+                      "mode": "minor",
+                      "overrides": [
+                        "dockpaum.min-image-age"
+                      ],
+                      "current": {
+                        "tag": "2.3.1",
+                        "digest": "sha256:3b25b682ea82b2db3cc4fd48db818be788ee3f902ac7378090cf2624ec2442df",
+                        "repo_digest": "ghcr.io/acme/api@sha256:8f1d3a6c5e2b4a7d9c0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e",
+                        "version": "2.3.1"
+                      },
+                      "candidate": {
+                        "image": "ghcr.io/acme/api:2.4.0",
+                        "tag": "2.4.0",
+                        "digest": "sha256:9c0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e8f1d3a6c5e2b4a7d",
+                        "repo_digest": "ghcr.io/acme/api@sha256:5e6f708192a3b4c5d6e8f1d3a6c5e2b4a7d9c0e1f2a3b4c5d6e7f8091a2b3c4d",
+                        "version": "2.4.0",
+                        "found_at": "2026-10-29T04:00:12Z",
+                        "first_seen": "2026-10-29T04:00:12Z",
+                        "created": "2026-10-28T17:41:03Z",
+                        "release_url": "https://git.example.com/acme/api/releases/tag/v2.4.0"
+                      },
+                      "update": "available",
+                      "pending": true,
+                      "decision": "gated-window",
+                      "reason": "outside policy \"release\" window",
+                      "checked_at": "2026-10-30T04:00:12Z",
+                      "eligible_at": "2026-10-30T04:00:12Z",
+                      "next_window": "2026-11-01T02:00:00Z",
+                      "check": "registry",
+                      "run_id": "9f2c41d07ab3e815"
+                    },
+                    {
+                      "host": "local",
+                      "container": "db",
+                      "container_id": "7d3e8f60a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f607184f9a1c2b",
+                      "image": "postgres:16",
+                      "policy": "db",
+                      "policy_source": "label dockpaum.policy=db",
+                      "mode": "tag-follow",
+                      "current": {
+                        "tag": "16",
+                        "digest": "sha256:0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9",
+                        "repo_digest": "postgres@sha256:c6d7e8f90a1b2c3d4e5f60718293a4b50a1b2c3d4e5f60718293a4b5c6d7e8f9",
+                        "version": "16"
+                      },
+                      "update": "none",
+                      "pending": false,
+                      "decision": "skipped",
+                      "reason": "image up-to-date",
+                      "checked_at": "2026-10-30T04:00:13Z",
+                      "check": "registry",
+                      "run_id": "9f2c41d07ab3e815"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ListBadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowedGetHead"
+          }
+        }
+      }
+    },
+    "/internal-api/v1/update": {
+      "post": {
+        "tags": [
+          "triggers"
+        ],
+        "operationId": "triggerUpdate",
+        "summary": "Queue an update run",
+        "description": "Queues an update run and answers at once; the response does not report how the run went. Follow it with `GET /internal-api/busy`, `last_run` of `GET /internal-api/v1/status`, or `GET /internal-api/v1/containers`.\n\nWithout parameters, the run covers what a scheduled regular run covers: containers whose policy has its own schedule are left out. `container` and `image` select containers by name or image and also cover containers whose policy has its own schedule; `policy` selects the containers of one policy. Parameters combine: a container must match every one given. A request that matches no container is still accepted and changes nothing.\n\nA requested run ignores the global `schedule.windows`, since it was asked for. Each container still passes its policy's gates: windows, soak time, approval, health check and rollback.\n\nThe run starts as soon as no other run is going. An identical request (the same selection, in any order) that is still waiting is not queued twice (`already-queued`). At most 32 requests wait at once (`too-many-queued`).\n\nNeeds `http.update_api: true`; otherwise 404. The token is checked before the switch and the method.\n\n**Access: write** (`http.token`).\n\n```sh\n# everything a scheduled run covers\ncurl -fsS -X POST -H \"Authorization: Bearer $DOCKPAUM_HTTP_TOKEN\" \\\n  http://localhost:8080/internal-api/v1/update\n\n# two containers\ncurl -fsS -X POST -H \"Authorization: Bearer $DOCKPAUM_HTTP_TOKEN\" \\\n  \"http://localhost:8080/internal-api/v1/update?container=api&container=worker\"\n```",
+        "x-dockpaum-access": "write",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TriggerContainer"
+          },
+          {
+            "$ref": "#/components/parameters/TriggerImage"
+          },
+          {
+            "$ref": "#/components/parameters/TriggerPolicy"
+          }
+        ],
+        "responses": {
+          "202": {
+            "$ref": "#/components/responses/TriggerAccepted"
+          },
+          "400": {
+            "$ref": "#/components/responses/TriggerBadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/TriggerNotFound"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowedPost"
+          },
+          "429": {
+            "$ref": "#/components/responses/TriggerTooManyQueued"
+          },
+          "503": {
+            "$ref": "#/components/responses/TriggerUnavailable"
+          }
+        }
+      }
+    },
+    "/internal-api/v1/check": {
+      "post": {
+        "tags": [
+          "triggers"
+        ],
+        "operationId": "triggerCheck",
+        "summary": "Queue a check run",
+        "description": "Queues a check run: a run of the selected containers that looks for newer images and reports what it finds, but never applies an update. It is a dry run for that run only, whatever `dry_run` says: nothing is pulled or recreated, no hook runs and the approval endpoint is not asked. It records its decisions (`dry-run` where an update would happen) in the container entries of `GET /internal-api/v1/containers`, which then read as a plan, and sends `update.available` notifications for what it finds. Its `last_run.trigger` is `api`.\n\nParameters, selection, queueing, switches, access and responses are those of `POST /internal-api/v1/update`. A check and an update of the same selection are queued separately.\n\nNeeds `http.update_api: true`; otherwise 404. The token is checked before the switch and the method.\n\n**Access: write** (`http.token`).\n\n```sh\n# check the containers of one policy\ncurl -fsS -X POST -H \"Authorization: Bearer $DOCKPAUM_HTTP_TOKEN\" \\\n  \"http://localhost:8080/internal-api/v1/check?policy=release\"\n\n# once GET /internal-api/busy reports false, list what is waiting\ncurl -fsS -H \"Authorization: Bearer $DOCKPAUM_HTTP_READ_TOKEN\" \\\n  \"http://localhost:8080/internal-api/v1/containers?pending=true\"\n```",
+        "x-dockpaum-access": "write",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TriggerContainer"
+          },
+          {
+            "$ref": "#/components/parameters/TriggerImage"
+          },
+          {
+            "$ref": "#/components/parameters/TriggerPolicy"
+          }
+        ],
+        "responses": {
+          "202": {
+            "$ref": "#/components/responses/TriggerAccepted"
+          },
+          "400": {
+            "$ref": "#/components/responses/TriggerBadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/TriggerNotFound"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowedPost"
+          },
+          "429": {
+            "$ref": "#/components/responses/TriggerTooManyQueued"
+          },
+          "503": {
+            "$ref": "#/components/responses/TriggerUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/update": {
+      "get": {
+        "tags": [
+          "watchtower"
+        ],
+        "operationId": "watchtowerUpdateGet",
+        "summary": "Queue an update run (Watchtower, GET)",
+        "description": "Watchtower's update route, served only with `http.watchtower_compat: true`. It queues the same run as `POST /internal-api/v1/update` and accepts the same parameters, including Watchtower's `image`. The answer is dockpaum's `{\"status\": ...}` with the status codes of `POST /internal-api/v1/update`. `GET` and `POST` are accepted; other methods get 405.\n\nNeeds `http.update_api: true`; otherwise 404.\n\n**Access: write** (`http.token`).",
+        "x-dockpaum-access": "write",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TriggerContainer"
+          },
+          {
+            "$ref": "#/components/parameters/TriggerImage"
+          },
+          {
+            "$ref": "#/components/parameters/TriggerPolicy"
+          }
+        ],
+        "responses": {
+          "202": {
+            "$ref": "#/components/responses/TriggerAccepted"
+          },
+          "400": {
+            "$ref": "#/components/responses/TriggerBadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/WatchtowerUpdateNotFound"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowedGetPost"
+          },
+          "429": {
+            "$ref": "#/components/responses/TriggerTooManyQueued"
+          },
+          "503": {
+            "$ref": "#/components/responses/TriggerUnavailable"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "watchtower"
+        ],
+        "operationId": "watchtowerUpdatePost",
+        "summary": "Queue an update run (Watchtower, POST)",
+        "description": "The `POST` form of Watchtower's update route; identical to `GET /v1/update`. Served only with `http.watchtower_compat: true`, and needs `http.update_api: true`; otherwise 404.\n\n**Access: write** (`http.token`).\n\n```sh\ncurl -fsS -X POST -H \"Authorization: Bearer $DOCKPAUM_HTTP_TOKEN\" \\\n  \"http://localhost:8080/v1/update?image=ghcr.io/acme/api\"\n```",
+        "x-dockpaum-access": "write",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TriggerContainer"
+          },
+          {
+            "$ref": "#/components/parameters/TriggerImage"
+          },
+          {
+            "$ref": "#/components/parameters/TriggerPolicy"
+          }
+        ],
+        "responses": {
+          "202": {
+            "$ref": "#/components/responses/TriggerAccepted"
+          },
+          "400": {
+            "$ref": "#/components/responses/TriggerBadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/WatchtowerUpdateNotFound"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowedGetPost"
+          },
+          "429": {
+            "$ref": "#/components/responses/TriggerTooManyQueued"
+          },
+          "503": {
+            "$ref": "#/components/responses/TriggerUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/metrics": {
+      "get": {
+        "tags": [
+          "watchtower"
+        ],
+        "operationId": "getWatchtowerMetrics",
+        "summary": "Prometheus metrics with Watchtower's names",
+        "description": "Watchtower's metrics route, served only with `http.watchtower_compat: true`, for dashboards such as Homepage's Watchtower widget. It exports Watchtower's metric names, computed from dockpaum's last finished run, together with every metric of `GET /internal-api/metrics`, in the same format and content negotiation:\n\n| Metric | Type | Meaning |\n|---|---|---|\n| `watchtower_containers_scanned` | gauge | Containers scanned in the last run. |\n| `watchtower_containers_updated` | gauge | Containers updated in the last run. |\n| `watchtower_containers_failed` | gauge | Containers whose update failed in the last run. |\n| `watchtower_scans_total` | counter | Runs since dockpaum started. |\n\n**Access: read.** Open when neither `http.token` nor `http.read_token` is configured; otherwise one of them is required.",
+        "x-dockpaum-access": "read",
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The metrics.",
+            "content": {
+              "text/plain; version=0.0.4": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrometheusText"
+                },
+                "example": "# HELP watchtower_containers_failed Containers whose update failed in the most recent run (Watchtower-compatible)\n# TYPE watchtower_containers_failed gauge\nwatchtower_containers_failed 0\n# HELP watchtower_containers_scanned Containers scanned in the most recent run (Watchtower-compatible)\n# TYPE watchtower_containers_scanned gauge\nwatchtower_containers_scanned 14\n# HELP watchtower_containers_updated Containers updated in the most recent run (Watchtower-compatible)\n# TYPE watchtower_containers_updated gauge\nwatchtower_containers_updated 2\n# HELP watchtower_scans_total Runs since dockpaum started (Watchtower-compatible)\n# TYPE watchtower_scans_total counter\nwatchtower_scans_total 42\n"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/WatchtowerMetricsNotFound"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "opaque token",
+        "description": "A token from dockpaum's configuration, sent as `Authorization: Bearer <token>`. The scheme word is case-insensitive; the token must match exactly.\n\n- **read** access (`x-dockpaum-access: read`): `http.token` or `http.read_token`. When neither is configured, read operations need no token and ignore the header.\n- **write** access (`x-dockpaum-access: write`): `http.token` only. The read token gets 403. While `http.token` is not configured, write operations answer 404.\n\nThe tokens can also come from `http.token_file` and `http.read_token_file`, or from `DOCKPAUM_HTTP_TOKEN` and `DOCKPAUM_HTTP_READ_TOKEN` (or their `_FILE` variants)."
+      }
+    },
+    "headers": {
+      "WWW-Authenticate": {
+        "description": "The authentication challenge.",
+        "schema": {
+          "type": "string",
+          "const": "Bearer realm=\"dockpaum\""
+        }
+      }
+    },
+    "parameters": {
+      "TriggerContainer": {
+        "name": "container",
+        "in": "query",
+        "required": false,
+        "description": "Run only for these containers, by name as `docker ps` shows it. Repeat the parameter for several (`container=api&container=worker`). Values are trimmed, a leading `/` is removed, and empty values are ignored. Together with `image`, at most 256 values.",
+        "style": "form",
+        "explode": true,
+        "schema": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "type": "string"
+          }
+        },
+        "example": [
+          "api",
+          "worker"
+        ]
+      },
+      "TriggerImage": {
+        "name": "image",
+        "in": "query",
+        "required": false,
+        "description": "Run only for containers created from a matching image reference (Watchtower's parameter). Repeat the parameter or separate references with commas (`image=nginx,redis:7`); values are trimmed, and empty and duplicate references are dropped. A reference without tag or digest selects every tag of its repository, one with a tag selects that tag (an untagged container image counts as `latest`), one with a digest selects containers created from a reference with that digest. Docker Hub names match in any spelling (`nginx`, `library/nginx`, `docker.io/library/nginx`), registry host names case-insensitively.\n\nEach reference is at most 512 bytes, without whitespace or control characters; together with `container`, at most 256 values. The references are resolved to container names when the run starts; a name that also belongs to a container running another image on another host is left out. When no container matches, or a Docker host is unreachable at that moment, no run takes place.",
+        "style": "form",
+        "explode": true,
+        "schema": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "type": "string",
+            "maxLength": 512
+          }
+        },
+        "example": [
+          "ghcr.io/acme/api",
+          "redis:7"
+        ]
+      },
+      "TriggerPolicy": {
+        "name": "policy",
+        "in": "query",
+        "required": false,
+        "description": "Run only for containers whose policy has this ID. The value is trimmed and lowercased. Repeating the same value is fine; two different values are rejected with 400. An unknown ID is accepted, and its run selects no container.",
+        "schema": {
+          "type": "string"
+        },
+        "example": "release"
+      },
+      "ListHost": {
+        "name": "host",
+        "in": "query",
+        "required": false,
+        "description": "Only containers on these Docker hosts, by `hosts[].name`. Repeat the parameter for several. Values are trimmed and empty values are ignored; at most 256 values.",
+        "style": "form",
+        "explode": true,
+        "schema": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "type": "string"
+          }
+        },
+        "example": [
+          "local"
+        ]
+      },
+      "ListContainer": {
+        "name": "container",
+        "in": "query",
+        "required": false,
+        "description": "Only these containers, by name; a leading `/` is removed. Repeat the parameter for several. Values are trimmed and empty values are ignored; at most 256 values.",
+        "style": "form",
+        "explode": true,
+        "schema": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "type": "string"
+          }
+        },
+        "example": [
+          "api",
+          "db"
+        ]
+      },
+      "ListPending": {
+        "name": "pending",
+        "in": "query",
+        "required": false,
+        "description": "`true` lists only containers with an update available but not applied; `false` or an empty value lists all. Go's boolean spellings are accepted too (`1`, `t`, `T`, `TRUE`, `True`, `0`, `f`, `F`, `FALSE`, `False`); anything else is a 400.",
+        "schema": {
+          "type": "boolean",
+          "default": false
+        },
+        "example": true
+      }
+    },
+    "responses": {
+      "Unauthorized": {
+        "description": "No valid token: the `Authorization` header is missing, is not `Bearer <token>`, or its token matches neither configured token. Read operations answer this only while `http.token` or `http.read_token` is configured.",
+        "headers": {
+          "WWW-Authenticate": {
+            "$ref": "#/components/headers/WWW-Authenticate"
+          }
+        },
+        "content": {
+          "text/plain": {
+            "schema": {
+              "$ref": "#/components/schemas/PlainTextError"
+            },
+            "example": "unauthorized\n"
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "The read token (`http.read_token`) was sent to an operation that needs write access.",
+        "content": {
+          "text/plain": {
+            "schema": {
+              "$ref": "#/components/schemas/PlainTextError"
+            },
+            "example": "forbidden: http.read_token cannot trigger runs\n"
+          }
+        }
+      },
+      "MethodNotAllowedGetHead": {
+        "description": "The method is neither `GET` nor `HEAD`. Checked after the token.",
+        "headers": {
+          "Allow": {
+            "description": "The methods the route accepts.",
+            "schema": {
+              "type": "string",
+              "const": "GET, HEAD"
+            }
+          }
+        },
+        "content": {
+          "text/plain": {
+            "schema": {
+              "$ref": "#/components/schemas/PlainTextError"
+            },
+            "example": "method not allowed\n"
+          }
+        }
+      },
+      "MethodNotAllowedPost": {
+        "description": "The method is not `POST`. Checked after the token and the `http.update_api` switch.",
+        "headers": {
+          "Allow": {
+            "description": "The methods the route accepts.",
+            "schema": {
+              "type": "string",
+              "const": "POST"
+            }
+          }
+        },
+        "content": {
+          "text/plain": {
+            "schema": {
+              "$ref": "#/components/schemas/PlainTextError"
+            },
+            "example": "method not allowed\n"
+          }
+        }
+      },
+      "MethodNotAllowedGetPost": {
+        "description": "The method is neither `GET` nor `POST`. Checked after the token and the `http.update_api` switch.",
+        "headers": {
+          "Allow": {
+            "description": "The methods the route accepts.",
+            "schema": {
+              "type": "string",
+              "const": "GET, POST"
+            }
+          }
+        },
+        "content": {
+          "text/plain": {
+            "schema": {
+              "$ref": "#/components/schemas/PlainTextError"
+            },
+            "example": "method not allowed\n"
+          }
+        }
+      },
+      "TriggerNotFound": {
+        "description": "The trigger is switched off. While `http.token` is not configured, every caller gets 404 before any token check. With `http.token` configured, the token comes first (401 or 403), and a valid `http.token` gets 404 while `http.update_api` is not `true`.",
+        "content": {
+          "text/plain": {
+            "schema": {
+              "$ref": "#/components/schemas/PlainTextError"
+            },
+            "example": "404 page not found\n"
+          }
+        }
+      },
+      "WatchtowerUpdateNotFound": {
+        "description": "The route is switched off: `http.watchtower_compat` is not `true` (the route does not exist; no token is checked), `http.token` is not configured (404 before any token check), or `http.update_api` is not `true` (404 after the token check).",
+        "content": {
+          "text/plain": {
+            "schema": {
+              "$ref": "#/components/schemas/PlainTextError"
+            },
+            "example": "404 page not found\n"
+          }
+        }
+      },
+      "WatchtowerMetricsNotFound": {
+        "description": "`http.watchtower_compat` is not `true`: the route does not exist, and no token is checked.",
+        "content": {
+          "text/plain": {
+            "schema": {
+              "$ref": "#/components/schemas/PlainTextError"
+            },
+            "example": "404 page not found\n"
+          }
+        }
+      },
+      "TriggerBadRequest": {
+        "description": "Invalid query; nothing was queued. The causes: more than 256 `container` and `image` values together, an image reference longer than 512 bytes, or one with whitespace or control characters.",
+        "content": {
+          "text/plain": {
+            "schema": {
+              "$ref": "#/components/schemas/PlainTextError"
+            },
+            "examples": {
+              "tooMany": {
+                "summary": "More than 256 values",
+                "value": "bad request: more than 256 container and image values\n"
+              },
+              "tooLong": {
+                "summary": "An overlong image reference",
+                "value": "bad request: image: reference longer than 512 bytes\n"
+              },
+              "badCharacters": {
+                "summary": "An image reference with a space",
+                "value": "bad request: image \"bad name\": contains whitespace or control characters\n"
+              }
+            }
+          }
+        }
+      },
+      "ListBadRequest": {
+        "description": "Invalid query: more than 256 `host` or `container` values, or a `pending` value that is not a boolean.",
+        "content": {
+          "text/plain": {
+            "schema": {
+              "$ref": "#/components/schemas/PlainTextError"
+            },
+            "examples": {
+              "pending": {
+                "summary": "pending is not a boolean",
+                "value": "bad request: pending: \"maybe\" is not true or false\n"
+              },
+              "tooMany": {
+                "summary": "More than 256 container values",
+                "value": "bad request: more than 256 container values\n"
+              }
+            }
+          }
+        }
+      },
+      "TriggerAccepted": {
+        "description": "The run is queued (`queued`), or an identical request is already waiting (`already-queued`). Either way the requested run waits and starts as soon as no other run is going.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/TriggerResponse"
+            },
+            "examples": {
+              "queued": {
+                "summary": "Queued",
+                "value": {
+                  "status": "queued"
+                }
+              },
+              "alreadyQueued": {
+                "summary": "The same request is already waiting",
+                "value": {
+                  "status": "already-queued"
+                }
+              }
+            }
+          }
+        }
+      },
+      "TriggerTooManyQueued": {
+        "description": "32 requests are already waiting. Nothing was queued; try again later.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/TriggerResponse"
+            },
+            "example": {
+              "status": "too-many-queued"
+            }
+          }
+        }
+      },
+      "TriggerUnavailable": {
+        "description": "dockpaum is shutting down and queues no more runs.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/TriggerResponse"
+            },
+            "example": {
+              "status": "unavailable"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "PlainTextError": {
+        "type": "string",
+        "description": "An error as Go's `http.Error` writes it: one line of text followed by a newline, with `Content-Type: text/plain; charset=utf-8` and `X-Content-Type-Options: nosniff`.",
+        "examples": [
+          "unauthorized\n"
+        ]
+      },
+      "PrometheusText": {
+        "type": "string",
+        "description": "Metrics in the Prometheus text exposition format 0.0.4: `# HELP` and `# TYPE` lines followed by one sample per line.",
+        "examples": [
+          "# HELP dockpaum_runs_total Total update runs executed\n# TYPE dockpaum_runs_total counter\ndockpaum_runs_total 42\n"
+        ]
+      },
+      "Version": {
+        "type": "object",
+        "description": "Build information of the running binary.",
+        "required": [
+          "version",
+          "commit",
+          "date"
+        ],
+        "properties": {
+          "version": {
+            "type": "string",
+            "description": "The release: `v<YYYY.MM.DD>.<sha7>` for images built from `main`, `vdev<YYYY.MM.DD>.<sha7>` from `development`, `dev` or a `-dirty` suffix for local builds. A `go install` build reports its module version.",
+            "examples": [
+              "v2026.10.30.1a2b3c4"
+            ]
+          },
+          "commit": {
+            "type": "string",
+            "description": "The short (7-character) commit hash, or `unknown`.",
+            "examples": [
+              "1a2b3c4"
+            ]
+          },
+          "date": {
+            "type": "string",
+            "description": "The build time in RFC 3339 (UTC); for builds without one the commit time, else `unknown`.",
+            "examples": [
+              "2026-10-30T09:12:44Z"
+            ]
+          },
+          "go": {
+            "type": "string",
+            "description": "The Go version the binary was built with.",
+            "examples": [
+              "go1.27.3"
+            ]
+          },
+          "platform": {
+            "type": "string",
+            "description": "Operating system and architecture, `GOOS/GOARCH`.",
+            "examples": [
+              "linux/amd64"
+            ]
+          }
+        }
+      },
+      "Busy": {
+        "type": "object",
+        "description": "Whether a run is in progress.",
+        "required": [
+          "busy"
+        ],
+        "properties": {
+          "busy": {
+            "type": "boolean",
+            "description": "`true` while a run is in progress.",
+            "examples": [
+              true
+            ]
+          },
+          "run_id": {
+            "type": "string",
+            "description": "ID of the run in progress (16 hex characters), as later in `last_run.id` of the status document, in container entries and in audit records. Omitted when idle.",
+            "examples": [
+              "f4e1d70ff4d3862c"
+            ]
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When that run started, in UTC to the second. Omitted when idle.",
+            "examples": [
+              "2026-10-30T13:49:09Z"
+            ]
+          }
+        }
+      },
+      "Summary": {
+        "type": "object",
+        "description": "Counts for dashboards. Every field is always present.",
+        "required": [
+          "monitored",
+          "pending_updates",
+          "gated",
+          "updated_24h",
+          "failed_24h",
+          "dry_run",
+          "next_run_at",
+          "version",
+          "instance"
+        ],
+        "properties": {
+          "monitored": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Managed containers: the entries of `GET /internal-api/v1/containers`.",
+            "examples": [
+              12
+            ]
+          },
+          "pending_updates": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Containers with an update available but not applied.",
+            "examples": [
+              3
+            ]
+          },
+          "gated": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Containers whose last decision was a gate: a `gated-*` decision or `approval-denied`.",
+            "examples": [
+              2
+            ]
+          },
+          "updated_24h": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Updates in the last 24 hours (`updated` and `self-update-completed` audit decisions).",
+            "examples": [
+              4
+            ]
+          },
+          "failed_24h": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Failures in the last 24 hours (`failed`, `rolled-back`, `check-failed` and `self-update-failed` audit decisions).",
+            "examples": [
+              1
+            ]
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "`true` in dry-run mode: nothing is recreated.",
+            "examples": [
+              false
+            ]
+          },
+          "next_run_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The next scheduled regular run; `null` while unknown, for example once the scheduler has stopped at shutdown.",
+            "examples": [
+              "2026-10-31T04:00:00Z"
+            ]
+          },
+          "version": {
+            "type": "string",
+            "description": "The release of the running dockpaum, as in `GET /internal-api/version`.",
+            "examples": [
+              "v2026.10.30.1a2b3c4"
+            ]
+          },
+          "instance": {
+            "type": "string",
+            "description": "Name of this dockpaum instance (`instance` in the configuration, else the host name), as notifications use it.",
+            "examples": [
+              "nas-1"
+            ]
+          }
+        }
+      },
+      "Status": {
+        "type": "object",
+        "description": "The hosts, the last finished run and the schedule.",
+        "required": [
+          "version",
+          "hosts",
+          "last_run",
+          "instance",
+          "dry_run",
+          "running",
+          "first_run_pending",
+          "pending_updates"
+        ],
+        "properties": {
+          "version": {
+            "type": "string",
+            "description": "The release of the running dockpaum, as in `GET /internal-api/version`.",
+            "examples": [
+              "v2026.10.30.1a2b3c4"
+            ]
+          },
+          "hosts": {
+            "type": "array",
+            "description": "The configured Docker hosts, in configuration order.",
+            "items": {
+              "$ref": "#/components/schemas/HostStatus"
+            }
+          },
+          "last_run": {
+            "description": "The last run that finished since dockpaum started; `null` before the first.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RunSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "instance": {
+            "type": "string",
+            "description": "Name of this dockpaum instance (`instance` in the configuration, else the host name), as notifications use it.",
+            "examples": [
+              "nas-1"
+            ]
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "`true` in dry-run mode: nothing is recreated.",
+            "examples": [
+              false
+            ]
+          },
+          "running": {
+            "type": "boolean",
+            "description": "`true` while a run is in progress.",
+            "examples": [
+              false
+            ]
+          },
+          "first_run_pending": {
+            "type": "boolean",
+            "description": "`true` until the first run since the start has finished.",
+            "examples": [
+              false
+            ]
+          },
+          "next_run_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The next scheduled regular run. Omitted while unknown, for example once the scheduler has stopped at shutdown.",
+            "examples": [
+              "2026-10-30T04:05:41Z"
+            ]
+          },
+          "pending_updates": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Containers with an update available but not applied.",
+            "examples": [
+              1
+            ]
+          }
+        }
+      },
+      "HostStatus": {
+        "type": "object",
+        "description": "A configured Docker host.",
+        "required": [
+          "name",
+          "connected"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The host's `hosts[].name`.",
+            "examples": [
+              "local"
+            ]
+          },
+          "connected": {
+            "type": "boolean",
+            "description": "`true` while dockpaum has a connection to the host's Docker daemon.",
+            "examples": [
+              true
+            ]
+          }
+        }
+      },
+      "RunSummary": {
+        "type": "object",
+        "description": "A finished run.",
+        "required": [
+          "id",
+          "trigger",
+          "started",
+          "finished",
+          "scanned",
+          "updated",
+          "failed",
+          "skipped"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The run ID (16 hex characters): the `run_id` of its audit records and container entries.",
+            "examples": [
+              "9f2c41d07ab3e815"
+            ]
+          },
+          "trigger": {
+            "type": "string",
+            "description": "What started the run: `schedule` (the regular schedule, `schedule.run_on_start` included), `policy-schedule` (a policy's own schedule) or `api` (a trigger route).",
+            "examples": [
+              "schedule"
+            ]
+          },
+          "started": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the run started.",
+            "examples": [
+              "2026-10-30T04:00:00Z"
+            ]
+          },
+          "finished": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the run finished.",
+            "examples": [
+              "2026-10-30T04:00:41Z"
+            ]
+          },
+          "policy": {
+            "type": "string",
+            "description": "The policy the run was limited to, when it was.",
+            "examples": [
+              "release"
+            ]
+          },
+          "containers": {
+            "type": "array",
+            "description": "The container names the run was limited to, when it was; for an `image` trigger, the names its references resolved to.",
+            "items": {
+              "type": "string"
+            },
+            "examples": [
+              [
+                "api",
+                "worker"
+              ]
+            ]
+          },
+          "images": {
+            "type": "array",
+            "description": "The image references the run was limited to. The trigger routes resolve `image` to container names before the run, so their runs list those in `containers` instead.",
+            "items": {
+              "type": "string"
+            },
+            "examples": [
+              [
+                "ghcr.io/acme/api"
+              ]
+            ]
+          },
+          "scanned": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Containers in the run's scope, including those the filters excluded (`skipped`).",
+            "examples": [
+              14
+            ]
+          },
+          "updated": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Containers it updated.",
+            "examples": [
+              2
+            ]
+          },
+          "failed": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Containers whose update failed.",
+            "examples": [
+              0
+            ]
+          },
+          "skipped": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Containers in the run's scope that the filters excluded: `filters` settings, enable and scope labels.",
+            "examples": [
+              3
+            ]
+          },
+          "error": {
+            "type": "string",
+            "description": "Why the run failed, such as unreachable hosts, a failed `pre_run` hook or failed container updates. Omitted on success.",
+            "examples": [
+              "1 container update(s) failed"
+            ]
+          }
+        }
+      },
+      "ContainerList": {
+        "type": "object",
+        "description": "The managed containers that match the query.",
+        "required": [
+          "containers"
+        ],
+        "properties": {
+          "containers": {
+            "type": "array",
+            "description": "Sorted by host, then container name.",
+            "items": {
+              "$ref": "#/components/schemas/ContainerStatus"
+            }
+          }
+        }
+      },
+      "ContainerStatus": {
+        "type": "object",
+        "description": "What dockpaum last decided about a container. Every run that processes the container replaces it, dry runs and checks included; the entries of a dry run are a plan of what a run would do.",
+        "required": [
+          "host",
+          "container",
+          "image",
+          "current",
+          "update",
+          "pending",
+          "decision",
+          "checked_at"
+        ],
+        "properties": {
+          "host": {
+            "type": "string",
+            "description": "The Docker host (`hosts[].name`).",
+            "examples": [
+              "local"
+            ]
+          },
+          "container": {
+            "type": "string",
+            "description": "The container name.",
+            "examples": [
+              "api"
+            ]
+          },
+          "container_id": {
+            "type": "string",
+            "description": "The container ID.",
+            "examples": [
+              "4f9a1c2b7d3e8f60a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718"
+            ]
+          },
+          "image": {
+            "type": "string",
+            "description": "The image reference the container runs, from its configuration.",
+            "examples": [
+              "ghcr.io/acme/api:2.3.1"
+            ]
+          },
+          "policy": {
+            "type": "string",
+            "description": "The ID of the policy that applies.",
+            "examples": [
+              "release"
+            ]
+          },
+          "policy_source": {
+            "type": "string",
+            "description": "Why that policy applies: the label that selects it (`label dockpaum.policy=release`, with ` (built-in policy)` for a built-in one), `default policy`, or why the container's labels exclude it from updates.",
+            "examples": [
+              "label dockpaum.policy=release"
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "description": "The policy's update mode for this container after override labels: `tag-follow` (also for `mode: digest`), `patch`, `minor`, `major` or `none`.",
+            "examples": [
+              "minor"
+            ]
+          },
+          "overrides": {
+            "type": "array",
+            "description": "The override labels that changed the policy's settings for this container.",
+            "items": {
+              "type": "string"
+            },
+            "examples": [
+              [
+                "dockpaum.min-image-age"
+              ]
+            ]
+          },
+          "monitor_only": {
+            "type": "boolean",
+            "description": "`true` when updates are only reported, never applied. Omitted when `false`.",
+            "examples": [
+              true
+            ]
+          },
+          "current": {
+            "$ref": "#/components/schemas/ImageVersion",
+            "description": "The image the container runs."
+          },
+          "candidate": {
+            "$ref": "#/components/schemas/Candidate",
+            "description": "The newer image, when one is known (see `update`)."
+          },
+          "update": {
+            "type": "string",
+            "enum": [
+              "available",
+              "none",
+              "unknown"
+            ],
+            "description": "`available`: a newer image was found and is not deployed yet; a candidate found by an earlier run stays available while the container runs the same image. `none`: the last check found nothing newer, or the run updated the container. `unknown`: no check has compared the image the container runs, for example because a gate came first or the check failed.",
+            "examples": [
+              "available"
+            ]
+          },
+          "pending": {
+            "type": "boolean",
+            "description": "`true` when an update is available but not applied.",
+            "examples": [
+              true
+            ]
+          },
+          "decision": {
+            "type": "string",
+            "description": "The audit decision of the last run that processed the container, such as `updated`, `skipped`, `dry-run`, `failed`, `rolled-back`, `check-failed`, `check-incomplete`, `monitor-only`, `approval-denied` or one of the `gated-*` decisions (`gated-window`, `gated-min-age`, `gated-policy`, `gated-digest-pin`, `gated-autoremove`, `gated-orchestrated`, `gated-mac-address`). See the audit log reference for the full list.",
+            "examples": [
+              "gated-window"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "description": "The reason given with the decision.",
+            "examples": [
+              "outside policy \"release\" window"
+            ]
+          },
+          "error": {
+            "type": "string",
+            "description": "The error, when processing the container failed.",
+            "examples": [
+              "pull ghcr.io/acme/api:2.4.0: unauthorized"
+            ]
+          },
+          "checked_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When that run processed the container.",
+            "examples": [
+              "2026-10-30T04:00:12Z"
+            ]
+          },
+          "eligible_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the candidate clears the policy's `min_image_age`. Omitted when not applicable.",
+            "examples": [
+              "2026-10-30T04:00:12Z"
+            ]
+          },
+          "next_window": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the policy's maintenance window next opens, as of the later of the check and `eligible_at`. Omitted when the policy has no windows or a window is open then.",
+            "examples": [
+              "2026-11-01T02:00:00Z"
+            ]
+          },
+          "check": {
+            "type": "string",
+            "enum": [
+              "registry",
+              "pull",
+              "local"
+            ],
+            "description": "How the image was checked: `registry` (asked directly, nothing pulled), `pull` (the daemon pulled to compare) or `local` (label `dockpaum.no-pull`: the local image). Omitted when it was not checked.",
+            "examples": [
+              "registry"
+            ]
+          },
+          "check_note": {
+            "type": "string",
+            "description": "Why the registry could not be asked directly, when it could not.",
+            "examples": [
+              "registry answered 401 for the tag list"
+            ]
+          },
+          "approval": {
+            "$ref": "#/components/schemas/ApprovalStatus",
+            "description": "The approval endpoint's last answer about this container's update: from that run, or from an earlier one while the approver's retry time has not passed."
+          },
+          "run_id": {
+            "type": "string",
+            "description": "ID of the run that processed the container (`last_run.id` of the status document).",
+            "examples": [
+              "9f2c41d07ab3e815"
+            ]
+          }
+        }
+      },
+      "ImageVersion": {
+        "type": "object",
+        "description": "An image, by tag, local ID, registry digest and version. Fields that are not known are omitted.",
+        "properties": {
+          "tag": {
+            "type": "string",
+            "description": "The tag of the image reference.",
+            "examples": [
+              "2.3.1"
+            ]
+          },
+          "digest": {
+            "type": "string",
+            "description": "The local image ID (`sha256:...`), as in audit records.",
+            "examples": [
+              "sha256:3b25b682ea82b2db3cc4fd48db818be788ee3f902ac7378090cf2624ec2442df"
+            ]
+          },
+          "repo_digest": {
+            "type": "string",
+            "description": "The registry digest the image is pulled as (`name@sha256:...`).",
+            "examples": [
+              "ghcr.io/acme/api@sha256:8f1d3a6c5e2b4a7d9c0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e"
+            ]
+          },
+          "version": {
+            "type": "string",
+            "description": "The version the image is known by: the tag when it is a version, else its `org.opencontainers.image.version` label when that is one; the label also wins when it refines the tag (tag `16`, label `16.4`).",
+            "examples": [
+              "2.3.1"
+            ]
+          }
+        }
+      },
+      "Candidate": {
+        "type": "object",
+        "description": "The newer image found for a container.",
+        "required": [
+          "image",
+          "found_at"
+        ],
+        "properties": {
+          "image": {
+            "type": "string",
+            "description": "The reference the update would deploy: the container's own for `tag-follow`, with the new tag for `patch`, `minor` and `major`.",
+            "examples": [
+              "ghcr.io/acme/api:2.4.0"
+            ]
+          },
+          "tag": {
+            "type": "string",
+            "description": "The tag of that reference.",
+            "examples": [
+              "2.4.0"
+            ]
+          },
+          "digest": {
+            "type": "string",
+            "description": "The local image ID (`sha256:...`) of the candidate; after a `registry` check, the ID it will have once pulled.",
+            "examples": [
+              "sha256:9c0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e8f1d3a6c5e2b4a7d"
+            ]
+          },
+          "repo_digest": {
+            "type": "string",
+            "description": "The registry digest (`name@sha256:...`) the candidate is pulled by, when known.",
+            "examples": [
+              "ghcr.io/acme/api@sha256:5e6f708192a3b4c5d6e8f1d3a6c5e2b4a7d9c0e1f2a3b4c5d6e7f8091a2b3c4d"
+            ]
+          },
+          "version": {
+            "type": "string",
+            "description": "The version the candidate is known by: the tag when it is a version, else its `org.opencontainers.image.version` label when that is one; the label also wins when it refines the tag (tag `16`, label `16.4`).",
+            "examples": [
+              "2.4.0"
+            ]
+          },
+          "found_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When a check first found this candidate.",
+            "examples": [
+              "2026-10-29T04:00:12Z"
+            ]
+          },
+          "first_seen": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When dockpaum first saw this image, recorded for policies with a `min_image_age`.",
+            "examples": [
+              "2026-10-29T04:00:12Z"
+            ]
+          },
+          "created": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The build time the image records, when known.",
+            "examples": [
+              "2026-10-28T17:41:03Z"
+            ]
+          },
+          "release_url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Link to the candidate's release notes, when known.",
+            "examples": [
+              "https://git.example.com/acme/api/releases/tag/v2.4.0"
+            ]
+          }
+        }
+      },
+      "ApprovalStatus": {
+        "type": "object",
+        "description": "An answer of the approval endpoint.",
+        "required": [
+          "request_id",
+          "phase",
+          "approved",
+          "asked_at"
+        ],
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "description": "The ID of the approval request.",
+            "examples": [
+              "5d41402abc4b2a76b9719d911017c592"
+            ]
+          },
+          "phase": {
+            "type": "string",
+            "enum": [
+              "initial",
+              "final"
+            ],
+            "description": "The phase of the request.",
+            "examples": [
+              "initial"
+            ]
+          },
+          "approved": {
+            "type": "boolean",
+            "description": "Whether the update was approved.",
+            "examples": [
+              false
+            ]
+          },
+          "http_status": {
+            "type": "integer",
+            "description": "The HTTP status of the answer. Omitted when no answer came: the endpoint could not be reached, or the request could not be signed.",
+            "examples": [
+              403
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "description": "The approver's own reason from its JSON answer.",
+            "examples": [
+              "change freeze until Monday"
+            ]
+          },
+          "asked_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the endpoint was asked.",
+            "examples": [
+              "2026-10-30T04:00:12Z"
+            ]
+          },
+          "retry_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the approver may be asked about the container again, from its `Retry-After` header or the `retry_after_seconds` of a denial. Omitted when it named no time.",
+            "examples": [
+              "2026-11-02T08:00:00Z"
+            ]
+          }
+        }
+      },
+      "TriggerResponse": {
+        "type": "object",
+        "description": "The result of a trigger request.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "already-queued",
+              "too-many-queued",
+              "unavailable"
+            ],
+            "description": "`queued` (202): the run is queued. `already-queued` (202): an identical request is still waiting. `too-many-queued` (429): 32 requests are waiting, nothing was queued. `unavailable` (503): dockpaum is shutting down.",
+            "examples": [
+              "queued"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

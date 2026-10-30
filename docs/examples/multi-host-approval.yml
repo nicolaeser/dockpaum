@@ -1,0 +1,54 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/nicolaeser/dockpaum/main/dockpaum.schema.json
+
+log:
+  level: warn
+
+schedule:
+  interval: 5m
+
+hosts:
+  - name: prod
+    endpoint: "tcp://prod.example.com:2376"
+    tls:
+      ca_cert: /run/secrets/prod-ca.pem
+      client_cert: /run/secrets/prod-client.pem
+      client_key: /run/secrets/prod-client-key.pem
+  - name: staging
+    endpoint: "tcp://staging.example.com:2376"
+    tls:
+      ca_cert: /run/secrets/staging-ca.pem
+      client_cert: /run/secrets/staging-client.pem
+      client_key: /run/secrets/staging-client-key.pem
+
+update:
+  approval:
+    url: https://approvals.example.com/dockpaum
+    timeout: 15s
+    headers:
+      Authorization: "Bearer ${APPROVAL_TOKEN}"
+  policies:
+    - id: default
+      mode: tag-follow
+      min_image_age: 2h
+      health_timeout: 3m
+    - id: fast
+      mode: major
+      min_image_age: 0s
+      health_timeout: 30s
+
+registry:
+  - server: ghcr.io
+    username: ${REG_USER}
+    password: ${REG_PASS}
+  - server: ghcr.io/acme/billing
+    username: billing-bot
+    password_file: /run/secrets/billing-pull-token
+
+notify:
+  - type: webhook
+    name: central
+    url: https://logs.example.com/dockpaum
+    events: ["*"]
+
+audit:
+  retention: 90d

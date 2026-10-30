@@ -1,0 +1,34 @@
+[Unit]
+Description=dockpaum Docker container updater
+Documentation=https://github.com/nicolaeser/dockpaum
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=dockpaum
+Group=dockpaum
+SupplementaryGroups=docker
+EnvironmentFile=-/etc/dockpaum/dockpaum.env
+ExecStartPre=/usr/local/bin/dockpaum --validate --config /etc/dockpaum/dockpaum.yml
+ExecStart=/usr/local/bin/dockpaum --config /etc/dockpaum/dockpaum.yml
+Restart=on-failure
+RestartSec=10s
+TimeoutStopSec=5min
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ReadWritePaths=/var/lib/dockpaum /etc/dockpaum
+StateDirectory=dockpaum
+
+[Install]
+WantedBy=multi-user.target

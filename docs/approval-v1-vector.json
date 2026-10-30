@@ -1,0 +1,67 @@
+{
+  "scheme": "DOCKPAUM-APPROVAL-V1",
+  "description": "Golden vector for dockpaum signed approval requests. signature = lower-case hex HMAC-SHA256(key = UTF-8 bytes of secret, message = canonical_string); canonical_string = lines joined by \\n without a trailing newline: scheme, method, request URI, host (lower case, without the default port), timestamp, nonce, SHA-256 hex of the raw body.",
+  "name": "post-json",
+  "secret": "example-only-dockpaum-approval-v1-secret-0123456789",
+  "key_id": "example-key-1",
+  "method": "POST",
+  "url": "https://approver.example.com/v1/approve?source=dockpaum",
+  "request_uri": "/v1/approve?source=dockpaum",
+  "host": "approver.example.com",
+  "timestamp": "1767225600",
+  "nonce": "k3QxZ7m2VYp9R4tWb6NcH8aJ",
+  "body": "{\"request_id\":\"cbbde25b052cac52eeecb34b07771127\",\"phase\":\"initial\",\"host\":\"docker-1\",\"container_id\":\"0123456789ab0000000000000000000000000000000000000000000000000000\",\"container\":\"web\",\"image\":\"registry.example.com/team/web:1.4\",\"old_digest\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"new_digest\":\"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\"old_repo_digest\":\"registry.example.com/team/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"new_repo_digest\":\"registry.example.com/team/web@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"labels\":{\"com.docker.compose.project\":\"shop\",\"dockpaum.policy\":\"default\"},\"at\":\"2026-01-01T00:00:00Z\"}",
+  "body_sha256": "79fcbc5946dd8cf2d550d4ae4311e69a727310e8d09e3544fb868f67a5d57a76",
+  "canonical_string": "DOCKPAUM-APPROVAL-V1\nPOST\n/v1/approve?source=dockpaum\napprover.example.com\n1767225600\nk3QxZ7m2VYp9R4tWb6NcH8aJ\n79fcbc5946dd8cf2d550d4ae4311e69a727310e8d09e3544fb868f67a5d57a76",
+  "signature": "0e977e7847a7001b390d7550fa0bbacd768fca4f7b104f7de2513b05ac7414a9",
+  "headers": {
+    "X-Dockpaum-Key-Id": "example-key-1",
+    "X-Dockpaum-Timestamp": "1767225600",
+    "X-Dockpaum-Nonce": "k3QxZ7m2VYp9R4tWb6NcH8aJ",
+    "X-Dockpaum-Signature": "v1=0e977e7847a7001b390d7550fa0bbacd768fca4f7b104f7de2513b05ac7414a9"
+  },
+  "additional_vectors": [
+    {
+      "name": "get-query-final-port",
+      "secret": "example-only-dockpaum-approval-v1-secret-0123456789",
+      "key_id": "example-key-1",
+      "method": "GET",
+      "url": "https://approver.example.com:8443/approve?container=web&container_id=0123456789ab0000000000000000000000000000000000000000000000000000&host=docker-1&image=registry.example.com%2Fteam%2Fweb%3A1.4&new_digest=sha256%3A2222222222222222222222222222222222222222222222222222222222222222&new_repo_digest=registry.example.com%2Fteam%2Fweb%40sha256%3Abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb&old_digest=sha256%3A1111111111111111111111111111111111111111111111111111111111111111&old_repo_digest=registry.example.com%2Fteam%2Fweb%40sha256%3Aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&phase=final&request_id=cbbde25b052cac52eeecb34b07771127&token=abc",
+      "request_uri": "/approve?container=web&container_id=0123456789ab0000000000000000000000000000000000000000000000000000&host=docker-1&image=registry.example.com%2Fteam%2Fweb%3A1.4&new_digest=sha256%3A2222222222222222222222222222222222222222222222222222222222222222&new_repo_digest=registry.example.com%2Fteam%2Fweb%40sha256%3Abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb&old_digest=sha256%3A1111111111111111111111111111111111111111111111111111111111111111&old_repo_digest=registry.example.com%2Fteam%2Fweb%40sha256%3Aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&phase=final&request_id=cbbde25b052cac52eeecb34b07771127&token=abc",
+      "host": "approver.example.com:8443",
+      "timestamp": "1767225660",
+      "nonce": "Nonce_with-dash_0123456789",
+      "body": "",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonical_string": "DOCKPAUM-APPROVAL-V1\nGET\n/approve?container=web&container_id=0123456789ab0000000000000000000000000000000000000000000000000000&host=docker-1&image=registry.example.com%2Fteam%2Fweb%3A1.4&new_digest=sha256%3A2222222222222222222222222222222222222222222222222222222222222222&new_repo_digest=registry.example.com%2Fteam%2Fweb%40sha256%3Abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb&old_digest=sha256%3A1111111111111111111111111111111111111111111111111111111111111111&old_repo_digest=registry.example.com%2Fteam%2Fweb%40sha256%3Aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&phase=final&request_id=cbbde25b052cac52eeecb34b07771127&token=abc\napprover.example.com:8443\n1767225660\nNonce_with-dash_0123456789\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "signature": "581671d0c0fab0dc4d5fca53e18d44aa50dfebf8f97851947266a3383e9e0134",
+      "headers": {
+        "X-Dockpaum-Key-Id": "example-key-1",
+        "X-Dockpaum-Timestamp": "1767225660",
+        "X-Dockpaum-Nonce": "Nonce_with-dash_0123456789",
+        "X-Dockpaum-Signature": "v1=581671d0c0fab0dc4d5fca53e18d44aa50dfebf8f97851947266a3383e9e0134"
+      }
+    },
+    {
+      "name": "host-normalization",
+      "secret": "example-only-dockpaum-approval-v1-secret-0123456789",
+      "key_id": "default",
+      "method": "POST",
+      "url": "https://Approver.EXAMPLE.com:443/v1/approve",
+      "request_uri": "/v1/approve",
+      "host": "approver.example.com",
+      "timestamp": "1767225720",
+      "nonce": "TESTNONCE7Q2XG5LH3MZK4VA6B",
+      "body": "{\"request_id\":\"cbbde25b052cac52eeecb34b07771127\",\"phase\":\"initial\",\"host\":\"docker-1\",\"container_id\":\"0123456789ab0000000000000000000000000000000000000000000000000000\",\"container\":\"web\",\"image\":\"registry.example.com/team/web:1.4\",\"old_digest\":\"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\"new_digest\":\"sha256:2222222222222222222222222222222222222222222222222222222222222222\",\"old_repo_digest\":\"registry.example.com/team/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"new_repo_digest\":\"registry.example.com/team/web@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"labels\":{\"com.docker.compose.project\":\"shop\",\"dockpaum.policy\":\"default\"},\"at\":\"2026-01-01T00:00:00Z\"}",
+      "body_sha256": "79fcbc5946dd8cf2d550d4ae4311e69a727310e8d09e3544fb868f67a5d57a76",
+      "canonical_string": "DOCKPAUM-APPROVAL-V1\nPOST\n/v1/approve\napprover.example.com\n1767225720\nTESTNONCE7Q2XG5LH3MZK4VA6B\n79fcbc5946dd8cf2d550d4ae4311e69a727310e8d09e3544fb868f67a5d57a76",
+      "signature": "5a691f20d3c1d4f5c4a40fb4cf6ca922691c276c52b6f76b694b5c275ba65cd0",
+      "headers": {
+        "X-Dockpaum-Key-Id": "default",
+        "X-Dockpaum-Timestamp": "1767225720",
+        "X-Dockpaum-Nonce": "TESTNONCE7Q2XG5LH3MZK4VA6B",
+        "X-Dockpaum-Signature": "v1=5a691f20d3c1d4f5c4a40fb4cf6ca922691c276c52b6f76b694b5c275ba65cd0"
+      }
+    }
+  ]
+}
